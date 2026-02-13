@@ -28,12 +28,16 @@ class MusicXMLParser:
         metatags = tree.findall(".//metaTag")
         text_metadata = {}
         for m in metatags:
+            if m.text is None:
+                continue
             match m.attrib["name"]:
                 case "composer":
                     text_metadata["composer"] = m.text
                 case "workTitle":
                     text_metadata["title"] = m.text
         for t in tree.find(".//VBox").findall(".//Text"):
+            if t.find("./text").text is None:
+                continue
             match t.find("./style").text:
                 case "title" | "subtitle" | "composer" as key:
                     text_metadata[key] = t.find("./text").text
