@@ -134,7 +134,7 @@ class ScoreTransposeConfigs(BaseModel):
 class Musescore:
     """API with Musescore CLI binary (mscore)"""
 
-    def __init__(self, configs: Configs):
+    def __init__(self, configs: Configs = Configs()):
         """Create a Musescore object
 
         Args:
