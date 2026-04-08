@@ -111,8 +111,13 @@ AWS_ENDPOINT_URL_S3 = EnvironmentVariable("AWS_ENDPOINT_URL_S3", str)
 AWS_ENDPOINT_URL_IAM = EnvironmentVariable("AWS_ENDPOINT_URL_IAM", str)
 AWS_REGION = EnvironmentVariable("AWS_REGION", str)
 
+GOOGLE_DRIVE_FOLDER_ID = EnvironmentVariable("GOOGLE_DRIVE_FOLDER_ID", str)
+GOOGLE_APP_CREDENTIALS_JSON_PATH = EnvironmentVariable("GOOGLE_APP_CREDENTIALS_JSON_PATH", valid_path, is_secret=True)
+
 LOCAL_MSCZ_DIRECTORY = EnvironmentVariable("LOCAL_MSCZ_DIRECTORY", valid_path)
+LOCAL_PNG_DIRECTORY = EnvironmentVariable("LOCAL_PNG_DIRECTORY", valid_path)
 
 MSCORE_CMD = EnvironmentVariable("MSCORE_CMD", str, "mscore")
+MSCZ_BUCKET_NAME = EnvironmentVariable("MSCZ_BUCKET_NAME", str)
 
 NOTION_TOKEN = EnvironmentVariable("NOTION_TOKEN", str, None, is_secret=True)

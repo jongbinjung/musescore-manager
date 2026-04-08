@@ -10,8 +10,12 @@ from msm.environment_variables import (
     AWS_ENDPOINT_URL_S3,
     AWS_REGION,
     AWS_SECRET_ACCESS_KEY,
+    GOOGLE_APP_CREDENTIALS_JSON_PATH,
+    GOOGLE_DRIVE_FOLDER_ID,
     LOCAL_MSCZ_DIRECTORY,
+    LOCAL_PNG_DIRECTORY,
     MSCORE_CMD,
+    MSCZ_BUCKET_NAME,
     NOTION_TOKEN,
     EnvironmentVariable,
 )
@@ -81,9 +85,21 @@ class Configs:
         """AWS Region"""
         return read_value(AWS_REGION, profile_name=self.profile_name)
 
+    def google_app_credentials_json_path(self) -> str | None:
+        """Path to Google application credentials JSON file for Google Drive integration"""
+        return read_value(GOOGLE_APP_CREDENTIALS_JSON_PATH, profile_name=self.profile_name)
+
+    def google_drive_folder_id(self) -> str | None:
+        """Google Drive folder ID to upload PNGs to"""
+        return read_value(GOOGLE_DRIVE_FOLDER_ID, profile_name=self.profile_name)
+
     def local_mscz_directory(self) -> Path | None:
         """Local directory where .mscz files are stored"""
         return read_value(LOCAL_MSCZ_DIRECTORY, profile_name=self.profile_name)
+
+    def local_png_directory(self) -> Path | None:
+        """Local directory where .png exports are stored"""
+        return read_value(LOCAL_PNG_DIRECTORY, profile_name=self.profile_name)
 
     def mscore_cmd(self) -> str:
         """Path to the MuseScore command line executable
@@ -109,6 +125,10 @@ class Configs:
             raise MusescoreError(f"Problem running Musescore command {cmd}") from e
         LOGGER.info("Using MuseScore command: %s, version: %s", cmd, v.stdout.decode().strip())
         return read_value(MSCORE_CMD, profile_name=self.profile_name)
+
+    def mscz_bucket_name(self) -> Path | None:
+        """Local directory where .mscz files are stored"""
+        return read_value(MSCZ_BUCKET_NAME, profile_name=self.profile_name)
 
     def notion_token(self) -> str | None:
         """Notion integration token"""
