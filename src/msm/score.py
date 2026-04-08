@@ -85,6 +85,11 @@ class Score:
         return datetime.datetime.fromtimestamp(self._path.stat().st_mtime)
 
     @property
+    def source_modified_time_utc(self) -> datetime.datetime:
+        self._validate_path()
+        return datetime.datetime.fromtimestamp(self._path.stat().st_mtime, tz=datetime.timezone.utc)
+
+    @property
     def parent_dir(self) -> Path:
         return self._path.parent
 

@@ -1,5 +1,6 @@
 """Shared utility functions"""
 
+import datetime
 import unicodedata
 from itertools import chain
 from pathlib import Path
@@ -42,6 +43,10 @@ def paths_are_equal(p1: Path, p2: Path) -> bool:
         return True
 
     return False
+
+
+def last_modified_time_utc(path: Path) -> datetime.datetime:
+    return datetime.datetime.fromtimestamp(path.stat().st_mtime, tz=datetime.timezone.utc)
 
 
 def _capitalize_first_n(s: str, n: int = 1) -> str:
