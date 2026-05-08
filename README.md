@@ -10,7 +10,7 @@
     make init
     ```
 
-1. Create configuration/credentials file at `~/.msm/credentials`, with values:
+1. Create configuration/credentials file at `~/.msm/configs`, with values:
 
     ```ini
     [default]

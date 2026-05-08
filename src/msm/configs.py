@@ -20,13 +20,13 @@ from msm.environment_variables import (
     EnvironmentVariable,
 )
 from msm.exceptions import ConfigurationError, MusescoreError
-from msm.paths import get_credentials_path
+from msm.paths import get_configs_path
 
 LOGGER = logging.getLogger(__name__)
 
 
 def _read_from_file(name: str, profile_name: str = "default") -> str | None:
-    path = get_credentials_path()
+    path = get_configs_path()
     if not path.exists():
         return None
 
