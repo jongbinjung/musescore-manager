@@ -67,6 +67,15 @@ wheels = [
 ]
 
 [[package]]
+name = "captainplanet"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/e3/bf69c19276f256eaf088382e7365b58f2901933139f232ea817c5b011b59/captainplanet-0.0.1.tar.gz", hash = "sha256:4476e116e0c12fe5cd39f317dc107780f9fb29aa18e1357b70ac6815c9f2055c", size = 40832, upload-time = "2026-05-08T20:57:20.797Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/be/7b0f7e8ddd1a6f6547c1d67f4ac474365292208f87663fcc3f919f75bbcf/captainplanet-0.0.1-py3-none-any.whl", hash = "sha256:06325a913ee06db68c2e97bc6e2fa06a51cda19ef4b2b29ddf2cf5ced0171121", size = 4013, upload-time = "2026-05-08T20:57:19.366Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -666,6 +675,7 @@ wheels = [
 name = "musescore-manager"
 source = { editable = "." }
 dependencies = [
+    { name = "captainplanet" },
     { name = "pydantic" },
     { name = "typer" },
 ]
@@ -704,6 +714,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", marker = "extra == 's3'" },
+    { name = "captainplanet" },
     { name = "google-api-python-client", marker = "extra == 'gcs'" },
     { name = "google-auth-httplib2", marker = "extra == 'gcs'" },
     { name = "google-auth-oauthlib", marker = "extra == 'gcs'" },

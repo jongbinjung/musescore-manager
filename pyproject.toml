@@ -13,8 +13,9 @@ dynamic = ["version"]
 requires-python = ">=3.11"
 
 dependencies = [
-    "pydantic>=2,<3",
-    "typer>=0.21.1",
+  "captainplanet",
+  "pydantic>=2,<3",
+  "typer>=0.21.1",
 ]
 
 [project.scripts]
@@ -22,9 +23,9 @@ msm = "msm.main:app"
 
 [project.optional-dependencies]
 all = [
-    "musescore-manager[gcs]",
-    "musescore-manager[notion]",
-    "musescore-manager[s3]",
+  "musescore-manager[gcs]",
+  "musescore-manager[notion]",
+  "musescore-manager[s3]",
 ]
 gcs = [
   "google-api-python-client",
@@ -40,13 +41,13 @@ notion = [
 
 [dependency-groups]
 dev = [
-    "ipython>=9.9.0,<10",
-    "musescore-manager[all]",
-    "pytest-cov",
-    "pytest-mock>=3.6,<4",
-    "pytest>=9.0.2,<10",
-    "ruff>=0.14.14",
-    "setuptools_scm>=8",
+  "ipython>=9.9.0,<10",
+  "musescore-manager[all]",
+  "pytest-cov",
+  "pytest-mock>=3.6,<4",
+  "pytest>=9.0.2,<10",
+  "ruff>=0.14.14",
+  "setuptools_scm>=8",
 ]
 
 [tool.pytest.ini_options]
@@ -54,31 +55,30 @@ addopts = "--cov=src/msm --cov-report=term:skip-covered"
 asyncio_mode = "auto"
 minversion = "9.0"
 testpaths = [
-    "tests",
+  "tests",
 ]
 
 [tool.ruff]
 line-length = 120
 respect-gitignore = true
 src = [
-    "src",
-    "tests",
+  "src",
 ]
 
 [tool.ruff.lint]
 extend-select = [
-    "I",
+  "I",
 ]
 ignore = [
-    "E501",
+  "E501",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 
 # Do not enforce usage in init files
 "__init__.py" = [
-    "E402",
-    "F401",
+  "E402",
+  "F401",
 ]
 
 [tool.ruff.format]

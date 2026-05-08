@@ -4,25 +4,30 @@ import configparser
 import logging
 from pathlib import Path
 
-from msm.environment_variables import (
-    AWS_ACCESS_KEY_ID,
-    AWS_ENDPOINT_URL_IAM,
-    AWS_ENDPOINT_URL_S3,
-    AWS_REGION,
-    AWS_SECRET_ACCESS_KEY,
-    GOOGLE_APP_CREDENTIALS_JSON_PATH,
-    GOOGLE_DRIVE_FOLDER_ID,
-    LOCAL_MSCZ_DIRECTORY,
-    LOCAL_PNG_DIRECTORY,
-    MSCORE_CMD,
-    MSCZ_BUCKET_NAME,
-    NOTION_TOKEN,
-    EnvironmentVariable,
-)
+from captainplanet import EnvironmentVariable
+
 from msm.exceptions import ConfigurationError, MusescoreError
 from msm.paths import get_configs_path
+from msm.types import valid_path
 
 LOGGER = logging.getLogger(__name__)
+
+AWS_ACCESS_KEY_ID = EnvironmentVariable("AWS_ACCESS_KEY_ID", str, obfuscated=True)
+AWS_SECRET_ACCESS_KEY = EnvironmentVariable("AWS_SECRET_ACCESS_KEY", str, obfuscated=True)
+AWS_ENDPOINT_URL_S3 = EnvironmentVariable("AWS_ENDPOINT_URL_S3", str)
+AWS_ENDPOINT_URL_IAM = EnvironmentVariable("AWS_ENDPOINT_URL_IAM", str)
+AWS_REGION = EnvironmentVariable("AWS_REGION", str)
+
+GOOGLE_DRIVE_FOLDER_ID = EnvironmentVariable("GOOGLE_DRIVE_FOLDER_ID", str)
+GOOGLE_APP_CREDENTIALS_JSON_PATH = EnvironmentVariable("GOOGLE_APP_CREDENTIALS_JSON_PATH", valid_path)
+
+LOCAL_MSCZ_DIRECTORY = EnvironmentVariable("LOCAL_MSCZ_DIRECTORY", valid_path)
+LOCAL_PNG_DIRECTORY = EnvironmentVariable("LOCAL_PNG_DIRECTORY", valid_path)
+
+MSCORE_CMD = EnvironmentVariable("MSCORE_CMD", str, default_value="mscore")
+MSCZ_BUCKET_NAME = EnvironmentVariable("MSCZ_BUCKET_NAME", str)
+
+NOTION_TOKEN = EnvironmentVariable("NOTION_TOKEN", str, None, obfuscated=True)
 
 
 def _read_from_file(name: str, profile_name: str = "default") -> str | None:
