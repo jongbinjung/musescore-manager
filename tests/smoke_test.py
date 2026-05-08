@@ -3,4 +3,4 @@
 
 from msm.configs import Configs
 
-Configs().mscore_cmd()
+Configs()
