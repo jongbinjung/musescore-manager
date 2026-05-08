@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=80", "setuptools-scm[simple]>=8"]
+requires = ["setuptools>=80", "setuptools-scm[simple]>=9.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,9 +9,7 @@ readme = "README.md"
 authors = [
     { name = "Jongbin Jung", email = "jungjongbin86@gmail.com" }
 ]
-dynamic = [
-    "version",
-]
+dynamic = ["version"]
 requires-python = ">=3.11"
 
 dependencies = [
@@ -24,8 +22,14 @@ msm = "msm.main:app"
 
 [project.optional-dependencies]
 all = [
+    "musescore-manager[gcs]",
     "musescore-manager[notion]",
     "musescore-manager[s3]",
+]
+gcs = [
+  "google-api-python-client",
+  "google-auth-httplib2",
+  "google-auth-oauthlib",
 ]
 s3 = [
     "boto3",
@@ -42,6 +46,7 @@ dev = [
     "pytest-mock>=3.6,<4",
     "pytest>=9.0.2,<10",
     "ruff>=0.14.14",
+    "setuptools_scm>=8",
 ]
 
 [tool.pytest.ini_options]
