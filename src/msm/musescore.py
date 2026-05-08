@@ -269,7 +269,7 @@ class Musescore:
             ) from e
 
     def _run_mscore(self, *args, score: Score | None = None) -> subprocess.CompletedProcess:
-        cmd = [self._mscore_cmd, "-F"]
+        cmd = [self._mscore_cmd]
         if score is not None:
             path_str = self._validate_score(score)
             cmd.append(path_str)
