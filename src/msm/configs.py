@@ -52,7 +52,7 @@ def read_value(var: EnvironmentVariable, profile_name: str = "default"):
 
     Return type is determined by the EnvironmentVariable.type
     """
-    from_file = var.type(_read_from_file(var.name, profile_name=profile_name))
+    from_file = var.type_(_read_from_file(var.name, profile_name=profile_name))
     from_env = _read_from_env(var)
     return from_env or from_file
 
