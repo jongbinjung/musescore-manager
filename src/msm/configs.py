@@ -24,7 +24,7 @@ GOOGLE_APP_CREDENTIALS_JSON_PATH = EnvironmentVariable("GOOGLE_APP_CREDENTIALS_J
 LOCAL_MSCZ_DIRECTORY = EnvironmentVariable("LOCAL_MSCZ_DIRECTORY", valid_path)
 LOCAL_PNG_DIRECTORY = EnvironmentVariable("LOCAL_PNG_DIRECTORY", valid_path)
 
-MSCORE_CMD = EnvironmentVariable("MSCORE_CMD", str, default_value="mscore")
+MSCORE_CMD = EnvironmentVariable("MSCORE_CMD", str)
 MSCZ_BUCKET_NAME = EnvironmentVariable("MSCZ_BUCKET_NAME", str)
 
 NOTION_TOKEN = EnvironmentVariable("NOTION_TOKEN", str, None, obfuscated=True)
@@ -47,14 +47,14 @@ def _read_from_env(var: EnvironmentVariable) -> str | None:
     return var.get()
 
 
-def read_value(var: EnvironmentVariable, profile_name: str = "default"):
+def read_value(var: EnvironmentVariable, profile_name: str = "default", default_value=None):
     """Read the value of the given environment variable from either the environment or the config file
 
     Return type is determined by the EnvironmentVariable.type
     """
     from_file = var.type_(_read_from_file(var.name, profile_name=profile_name))
     from_env = _read_from_env(var)
-    return from_env or from_file
+    return from_env or from_file or default_value
 
 
 class Configs:
@@ -115,7 +115,7 @@ class Configs:
         """
         import subprocess
 
-        cmd = read_value(MSCORE_CMD, profile_name=self.profile_name)
+        cmd = read_value(MSCORE_CMD, profile_name=self.profile_name, default_value="mscore")
 
         if cmd is None:
             raise ConfigurationError(
