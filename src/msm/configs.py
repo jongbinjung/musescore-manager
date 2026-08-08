@@ -62,7 +62,7 @@ class Configs:
 
     All values are read from
         1. An environment variable of the same name, but in ALL CAPS
-        2. A configuration file located at ~/.msm/credentials under the section [{profile_name}]
+        2. A configuration file located at ~/.msm/configs under the section [{profile_name}]
     in that order.
 
     """
@@ -90,7 +90,7 @@ class Configs:
         """AWS Region"""
         return read_value(AWS_REGION, profile_name=self.profile_name)
 
-    def google_app_credentials_json_path(self) -> str | None:
+    def google_app_credentials_json_path(self) -> Path | None:
         """Path to Google application credentials JSON file for Google Drive integration"""
         return read_value(GOOGLE_APP_CREDENTIALS_JSON_PATH, profile_name=self.profile_name)
 

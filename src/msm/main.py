@@ -12,6 +12,14 @@ from msm.score import Score
 app = typer.Typer()
 
 
+def _create_drive_session(creds_path: Path, folder_id: str):
+    try:
+        from msm.gdrive import DriveSession
+    except ModuleNotFoundError as error:
+        raise RuntimeError("Google Drive support requires the 'gcs' optional dependencies") from error
+    return DriveSession.from_credentials(creds_path, folder_id)
+
+
 def _validate_mscz_directory(path: Path | None):
     if path is None:
         typer.echo("mscz directory not set")
@@ -32,12 +40,10 @@ def global_args(
 ):
     """Global options and arguments"""
     configs = Configs(profile_name=profile)
-    musescore = Musescore(configs=configs)
-
     ctx.ensure_object(dict)
     ctx.obj["configs"] = configs
     ctx.obj["dryrun"] = dryrun
-    ctx.obj["musescore"] = musescore
+    ctx.obj["musescore"] = None
     ctx.obj["path"] = path or configs.local_mscz_directory()
     ctx.obj["verbose"] = verbose
 
@@ -47,7 +53,7 @@ def normalize(ctx: typer.Context):
     configs = ctx.obj.get("configs", Configs())
     dryrun = ctx.obj.get("dryrun", True)
     mscz_dir = ctx.obj.get("path", configs.local_mscz_directory())
-    musescore = ctx.obj.get("musescore", Musescore(configs))
+    musescore = ctx.obj.get("musescore") or Musescore(configs)
     verbose = ctx.obj.get("verbose", False)
 
     _validate_mscz_directory(mscz_dir)
@@ -75,7 +81,7 @@ def export_pngs(
     configs = ctx.obj.get("configs", Configs())
     dryrun = ctx.obj.get("dryrun", True)
     mscz_dir = ctx.obj.get("path", configs.local_mscz_directory())
-    musescore = ctx.obj.get("musescore", Musescore(configs))
+    musescore = ctx.obj.get("musescore") or Musescore(configs)
     verbose = ctx.obj.get("verbose", False)
 
     if export_dir is None:
@@ -100,6 +106,77 @@ def export_pngs(
                         progress.console.print(f"\t{result}")
 
             progress.advance(task)
+
+
+@app.command()
+def sync_pngs(ctx: typer.Context):
+    configs = ctx.obj.get("configs", Configs())
+    dryrun = ctx.obj.get("dryrun", False)
+    verbose = ctx.obj.get("verbose", False)
+
+    folder_id = configs.google_drive_folder_id()
+    creds_path_str = configs.google_app_credentials_json_path()
+
+    if not folder_id:
+        typer.echo("GOOGLE_DRIVE_FOLDER_ID is not configured")
+        raise typer.Exit(code=1)
+    if not creds_path_str:
+        typer.echo("GOOGLE_APP_CREDENTIALS_JSON_PATH is not configured")
+        raise typer.Exit(code=1)
+
+    png_dir = configs.local_png_directory()
+    if png_dir is None:
+        typer.echo("LOCAL_PNG_DIRECTORY is not configured")
+        raise typer.Exit(code=1)
+
+    png_dir = Path(png_dir)
+    if not png_dir.is_dir():
+        typer.echo(f"PNG directory {png_dir} does not exist")
+        raise typer.Exit(code=1)
+
+    creds_path = Path(creds_path_str)
+
+    png_files = sorted(path for path in png_dir.iterdir() if path.is_file() and path.suffix.lower() == ".png")
+    if not png_files:
+        typer.echo("No PNG files found")
+        return
+
+    try:
+        session = _create_drive_session(creds_path, folder_id)
+    except Exception as error:
+        typer.echo(f"Failed to connect to Google Drive: {error}")
+        raise typer.Exit(code=1)
+
+    failures = 0
+
+    with Progress() as progress:
+        task = progress.add_task("Syncing PNGs...", total=len(png_files))
+
+        for filepath in png_files:
+            if verbose or dryrun:
+                progress.console.print(f"Syncing {filepath.name}")
+
+            try:
+                result = session.sync_file(filepath, dryrun=dryrun)
+                labels = {
+                    "created": "Created",
+                    "updated": "Updated",
+                    "skipped": "Up to date; skipped",
+                    "would_create": "Would create",
+                    "would_update": "Would update",
+                    "conflict": "Conflict",
+                }
+                progress.console.print(f"  {labels[result.status.value]} {filepath.name}")
+                if result.status.value in {"conflict"}:
+                    failures += 1
+            except Exception as e:
+                progress.console.print(f"  Failed to upload {filepath.name}: {e}")
+                failures += 1
+
+            progress.advance(task)
+
+    if failures:
+        raise typer.Exit(code=1)
 
 
 @app.command()
