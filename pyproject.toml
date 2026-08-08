@@ -22,27 +22,14 @@ dependencies = [
 msm = "msm.main:app"
 
 [project.optional-dependencies]
-all = [
-  "musescore-manager[gcs]",
-  "musescore-manager[notion]",
-  "musescore-manager[s3]",
-]
-gcs = [
-  "google-api-python-client",
-  "google-auth-httplib2",
-  "google-auth-oauthlib",
-]
 s3 = [
     "boto3",
-]
-notion = [
-    "notion-client>=2.7.0",
 ]
 
 [dependency-groups]
 dev = [
   "ipython>=9.9.0,<10",
-  "musescore-manager[all]",
+  "musescore-manager[s3]",
   "pytest-cov",
   "pytest-mock>=3.6,<4",
   "pytest>=9.0.2,<10",
@@ -52,7 +39,6 @@ dev = [
 
 [tool.pytest.ini_options]
 addopts = "--cov=src/msm --cov-report=term:skip-covered"
-asyncio_mode = "auto"
 minversion = "9.0"
 testpaths = [
   "tests",

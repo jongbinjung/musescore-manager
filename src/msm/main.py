@@ -4,7 +4,7 @@ from typing import Annotated
 import typer
 from rich.progress import Progress
 
-from msm.configs import Configs
+from msm.config import Configs
 from msm.export import to_pngs
 from msm.musescore import Musescore
 from msm.score import Score

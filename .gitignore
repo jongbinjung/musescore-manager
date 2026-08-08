@@ -1,6 +1,8 @@
 .mscbackup/
 .DS_Store
 *.swp
+.env
+token.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

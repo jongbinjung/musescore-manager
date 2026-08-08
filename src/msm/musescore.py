@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import BaseModel, model_validator
 
-from msm.configs import Configs
+from msm.config import Configs
 from msm.utils import normalize_unicode_filename
 
 if TYPE_CHECKING:
