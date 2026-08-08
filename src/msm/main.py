@@ -28,6 +28,14 @@ def _context(ctx: typer.Context) -> AppContext:
     return ctx.obj
 
 
+def _create_drive_session(creds_path: Path, folder_id: str):
+    from msm.gdrive import DriveSession
+
+    session = DriveSession.from_credentials(creds_path, folder_id)
+    session.validate_folder()
+    return session
+
+
 def _require_mscz_path(path: Path | None) -> Path:
     if path is None:
         typer.echo("mscz directory not set")
@@ -119,6 +127,76 @@ def export_pngs(
                         progress.console.print(f"\t{result}")
 
             progress.advance(task)
+
+
+@app.command()
+def sync_pngs(ctx: typer.Context):
+    context = _context(ctx)
+    configs = context.configs
+    dryrun = context.dryrun
+    verbose = context.verbose
+
+    folder_id = configs.google_drive_folder_id()
+    creds_path = configs.google_app_credentials_json_path()
+
+    if not folder_id:
+        typer.echo("GOOGLE_DRIVE_FOLDER_ID is not configured")
+        raise typer.Exit(code=1)
+    if creds_path is None:
+        typer.echo("GOOGLE_APP_CREDENTIALS_JSON_PATH is not configured")
+        raise typer.Exit(code=1)
+
+    png_dir = configs.local_png_directory()
+    if png_dir is None:
+        typer.echo("LOCAL_PNG_DIRECTORY is not configured")
+        raise typer.Exit(code=1)
+
+    if not png_dir.is_dir():
+        typer.echo(f"PNG directory {png_dir} does not exist")
+        raise typer.Exit(code=1)
+
+    png_files = sorted(path for path in png_dir.iterdir() if path.is_file() and path.suffix.lower() == ".png")
+    if not png_files:
+        typer.echo("No PNG files found")
+        return
+
+    try:
+        session = _create_drive_session(creds_path, folder_id)
+    except Exception as error:
+        typer.echo(f"Failed to connect to Google Drive: {error}")
+        raise typer.Exit(code=1)
+
+    failures = 0
+
+    with Progress() as progress:
+        task = progress.add_task("Syncing PNGs...", total=len(png_files))
+
+        for filepath in png_files:
+            if verbose or dryrun:
+                progress.console.print(f"Syncing {filepath.name}")
+
+            try:
+                result = session.sync_file(filepath, dryrun=dryrun)
+                labels = {
+                    "created": "Created",
+                    "updated": "Updated",
+                    "skipped": "Up to date; skipped",
+                    "would_create": "Would create",
+                    "would_update": "Would update",
+                    "conflict": "Conflict",
+                }
+                detail = f": {result.error}" if result.error else ""
+                progress.console.print(f"  {labels[result.status.value]} {filepath.name}{detail}")
+                if result.status.value == "conflict":
+                    failures += 1
+            except Exception as e:
+                progress.console.print(f"  Failed to upload {filepath.name}: {e}")
+                failures += 1
+
+            progress.advance(task)
+
+    if failures:
+        raise typer.Exit(code=1)
 
 
 @app.command()

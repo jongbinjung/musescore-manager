@@ -4,6 +4,9 @@
 .env
 token.json
 .venv/
+google-drive-token.json
+credentials.json
+*.credentials.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

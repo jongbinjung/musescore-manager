@@ -12,6 +12,11 @@ AWS_ACCESS_KEY_ID = EnvironmentVariable("AWS_ACCESS_KEY_ID", str, obfuscated=Tru
 AWS_SECRET_ACCESS_KEY = EnvironmentVariable("AWS_SECRET_ACCESS_KEY", str, obfuscated=True)
 AWS_ENDPOINT_URL_S3 = EnvironmentVariable("AWS_ENDPOINT_URL_S3", str)
 
+GOOGLE_APP_CREDENTIALS_JSON_PATH = EnvironmentVariable(
+    "GOOGLE_APP_CREDENTIALS_JSON_PATH", lambda value: Path(value).expanduser()
+)
+GOOGLE_DRIVE_FOLDER_ID = EnvironmentVariable("GOOGLE_DRIVE_FOLDER_ID", str)
+
 LOCAL_MSCZ_DIRECTORY = EnvironmentVariable("LOCAL_MSCZ_DIRECTORY", lambda value: Path(value).expanduser())
 LOCAL_PNG_DIRECTORY = EnvironmentVariable("LOCAL_PNG_DIRECTORY", lambda value: Path(value).expanduser())
 
@@ -23,6 +28,10 @@ T = TypeVar("T")
 
 def get_configs_path() -> Path:
     return Path.home() / ".msm" / "configs"
+
+
+def get_google_token_path() -> Path:
+    return Path.home() / ".msm" / "google-drive-token.json"
 
 
 def _read_from_file(name: str, profile_name: str) -> str | None:
@@ -62,6 +71,12 @@ class Configs:
 
     def aws_secret_access_key(self) -> str | None:
         return read_value(AWS_SECRET_ACCESS_KEY, profile_name=self.profile_name)
+
+    def google_app_credentials_json_path(self) -> Path | None:
+        return read_value(GOOGLE_APP_CREDENTIALS_JSON_PATH, profile_name=self.profile_name)
+
+    def google_drive_folder_id(self) -> str | None:
+        return read_value(GOOGLE_DRIVE_FOLDER_ID, profile_name=self.profile_name)
 
     def aws_endpoint_url_s3(self) -> str | None:
         return read_value(AWS_ENDPOINT_URL_S3, profile_name=self.profile_name)

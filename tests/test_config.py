@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from msm.config import Configs, get_configs_path
+from msm.config import Configs, get_configs_path, get_google_token_path
 
 
 @pytest.fixture(autouse=True)
@@ -11,6 +11,8 @@ def clean_environment(monkeypatch):
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_ENDPOINT_URL_S3",
+        "GOOGLE_APP_CREDENTIALS_JSON_PATH",
+        "GOOGLE_DRIVE_FOLDER_ID",
         "LOCAL_MSCZ_DIRECTORY",
         "LOCAL_PNG_DIRECTORY",
         "MSCORE_CMD",
@@ -63,8 +65,18 @@ def test_paths_are_expanded_but_need_not_exist(monkeypatch, tmp_path):
     assert Configs().local_png_directory() == tmp_path / "new-png-directory"
 
 
+def test_google_settings_are_typed(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GOOGLE_APP_CREDENTIALS_JSON_PATH", "~/credentials.json")
+    monkeypatch.setenv("GOOGLE_DRIVE_FOLDER_ID", "folder-id")
+
+    assert Configs().google_app_credentials_json_path() == tmp_path / "credentials.json"
+    assert Configs().google_drive_folder_id() == "folder-id"
+
+
 def test_get_configs_path_has_no_filesystem_side_effect(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert get_configs_path() == tmp_path / ".msm" / "configs"
+    assert get_google_token_path() == tmp_path / ".msm" / "google-drive-token.json"
     assert not (tmp_path / ".msm").exists()
