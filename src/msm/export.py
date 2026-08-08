@@ -62,22 +62,16 @@ def to_pngs(score: Score, musescore: ScoreRenderer, key: Key | None = None, base
             logging.info("Target PNG(s) are up to date; skipping export")
             return []
 
-        # A stale multi-page cache needs a fresh page count to protect the old
-        # page set from a partial export. A single-page cache can be checked
-        # against the generated result without another MuseScore invocation.
-        if len(expected_outputs) > 1:
-            pages = musescore.metadata(score).pages
-            if pages is None or pages < 1:
-                raise RuntimeError("MuseScore metadata did not include a positive page count")
-            expected_outputs = _expected_outputs(target_path, pages)
-
         expected_names = {_canonical_name(path) for path in expected_outputs}
 
         files = musescore.export_to(score, path=workspace / target_path.name)
         generated = _rename_for_page_numbers(files)
         generated_names = {_canonical_name(path) for path in generated}
-        if expected_names and generated_names != expected_names:
-            raise RuntimeError(f"MuseScore generated {sorted(generated_names)}; expected {sorted(expected_names)}")
+        if expected_names:
+            if generated_names != expected_names:
+                raise RuntimeError(f"MuseScore generated {sorted(generated_names)}; expected {sorted(expected_names)}")
+        elif not _valid_generated_names(generated, target_path):
+            raise RuntimeError(f"MuseScore generated an incomplete or unexpected page set: {sorted(generated_names)}")
 
         expected_by_name = {_canonical_name(path): path for path in expected_outputs}
         results = []
@@ -135,6 +129,25 @@ def _expected_outputs(target: Path, pages: int) -> list[Path]:
     if pages == 1:
         return [target]
     return [target.with_stem(f"{target.stem}-{page}-of-{pages}") for page in range(1, pages + 1)]
+
+
+def _valid_generated_names(files: list[Path], target: Path) -> bool:
+    names = {_canonical_name(path) for path in files}
+    if len(names) != len(files) or not files:
+        return False
+    if len(files) == 1:
+        return names == {_canonical_name(target)}
+
+    pages = set()
+    for path in files:
+        match = re.fullmatch(rf"{re.escape(target.stem)}-(\d+)-of-(\d+)\.png", _canonical_name(path))
+        if match is None:
+            return False
+        page, total = (int(value) for value in match.groups())
+        if total != len(files):
+            return False
+        pages.add(page)
+    return pages == set(range(1, len(files) + 1))
 
 
 def _managed_outputs(target: Path) -> list[Path]:

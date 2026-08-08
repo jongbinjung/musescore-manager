@@ -130,6 +130,20 @@ def test_sync_file_updates_stale_remote_file(tmp_path):
     assert result.status == SyncStatus.UPDATED
     assert result.remote_id == "remote-id"
     assert service.fake_files.update_calls[0]["fileId"] == "remote-id"
+    assert len(service.fake_files.list_calls) == 2
+    assert "name = 'score.png'" in service.fake_files.list_calls[1]["q"]
+    assert not service.fake_files.get_calls
+
+
+def test_sync_file_escapes_name_in_mutation_query(tmp_path):
+    path = tmp_path / "score\\'s.png"
+    path.write_bytes(b"abc")
+    service = FakeService([{"files": []}])
+
+    result = DriveSession(service, "folder-id").sync_file(path)
+
+    assert result.status == SyncStatus.CREATED
+    assert "name = 'score\\\\\\'s.png'" in service.fake_files.list_calls[1]["q"]
 
 
 def test_sync_file_dryrun_does_not_mutate(tmp_path):

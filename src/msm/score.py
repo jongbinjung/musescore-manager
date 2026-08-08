@@ -1,6 +1,5 @@
 """Models and definitions for interacting with Musescore and Score objects"""
 
-import io
 import logging
 import xml.etree.ElementTree as ET
 from itertools import chain
@@ -133,7 +132,7 @@ class Score:
         return f"{'-'.join(tokens)}.{suffix}"
 
     def _parse_metadata_from_bytes(self) -> ScoreMetadata:
-        with ZipFile(io.BytesIO(self.read_bytes()), "r") as z:
+        with ZipFile(self._path, "r") as z:
             _files = [
                 filename for filename in filter(lambda x: x.endswith(".mscx"), z.namelist()) if "/" not in filename
             ]

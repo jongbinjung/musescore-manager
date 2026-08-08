@@ -1,4 +1,5 @@
 import builtins
+from pathlib import Path
 
 import pytest
 
@@ -127,6 +128,44 @@ def test_sync_dryrun_reads_state_without_uploading(tmp_path):
 
     assert result.status is SyncStatus.UPDATED
     assert client.uploads == []
+
+
+def test_sync_dryrun_does_not_read_file_when_remote_metadata_is_missing(tmp_path, monkeypatch):
+    path = tmp_path / "score.mscz"
+    path.write_bytes(b"score")
+    client = FakeClient({"Metadata": {}})
+
+    def fail_read(self):
+        raise AssertionError("file should not be read")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    result = sync_file(S3Store(client, "scores"), path, "Score-C.mscz", dryrun=True)
+
+    assert result.status is SyncStatus.UPDATED
+
+
+def test_sync_dryrun_does_not_read_file_when_remote_is_newer(tmp_path, monkeypatch):
+    path = tmp_path / "score.mscz"
+    path.write_bytes(b"score")
+    local_stat = path.stat()
+    client = FakeClient(
+        {
+            "Metadata": {
+                "source-mtime-ns": str(local_stat.st_mtime_ns + 1),
+                "source-size": "1",
+            }
+        }
+    )
+
+    def fail_read(self):
+        raise AssertionError("file should not be read")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    result = sync_file(S3Store(client, "scores"), path, "Score-C.mscz", dryrun=True)
+
+    assert result.status is SyncStatus.REMOTE_NEWER
 
 
 def test_sync_does_not_overwrite_newer_remote_file(tmp_path):

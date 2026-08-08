@@ -113,6 +113,11 @@ def fingerprint(path: Path) -> LocalFile:
     return LocalFile(path=path, size=len(content), md5=digest, content=content)
 
 
+def _escape_drive_query_string(value: str) -> str:
+    """Escape a value used as a single-quoted Google Drive query string."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 class DriveSession:
     """One authenticated Drive client and one sync run's remote index."""
 
@@ -136,12 +141,15 @@ class DriveSession:
         if folder.get("trashed") or folder.get("mimeType") != FOLDER_MIME_TYPE:
             raise ValueError(f"Google Drive destination {self.folder_id} is not an accessible folder")
 
-    def list_files(self) -> list[dict]:
+    def list_files(self, name: str | None = None) -> list[dict]:
         files: list[dict] = []
         page_token = None
+        query = f"'{_escape_drive_query_string(self.folder_id)}' in parents and trashed = false"
+        if name is not None:
+            query = f"{query} and name = '{_escape_drive_query_string(name)}'"
         while True:
             request = self.service.files().list(
-                q=f"'{self.folder_id}' in parents and trashed = false",
+                q=query,
                 spaces="drive",
                 pageSize=1000,
                 pageToken=page_token,
@@ -200,7 +208,7 @@ class DriveSession:
             return SyncResult(path, status, remote_id=remote.get("id") if remote else None)
 
         if remote is None:
-            if self._name_matches(path.name, self.list_files()):
+            if self.list_files(path.name):
                 return SyncResult(path, SyncStatus.CONFLICT, error="same-name Drive file appeared during sync")
             _, _, _, _, _, MediaIoBaseUpload = _google_dependencies()
             request = self.service.files().create(
@@ -219,17 +227,13 @@ class DriveSession:
             self._remote_index().setdefault(path.name, []).append(response)
             return SyncResult(path, SyncStatus.CREATED, remote_id=response.get("id"))
 
-        refreshed_matches = self._name_matches(path.name, self.list_files())
+        refreshed_matches = self.list_files(path.name)
         if len(refreshed_matches) != 1 or refreshed_matches[0].get("id") != remote["id"]:
             return SyncResult(
                 path, SyncStatus.CONFLICT, remote_id=remote["id"], error="Drive folder changed during sync"
             )
 
-        current = (
-            self.service.files()
-            .get(fileId=remote["id"], fields=FILE_FIELDS, supportsAllDrives=True)
-            .execute(num_retries=3)
-        )
+        current = refreshed_matches[0]
         if not self._is_managed(current) or not self._same_revision(remote, current):
             return SyncResult(path, SyncStatus.CONFLICT, remote_id=remote["id"], error="Drive file changed during sync")
 

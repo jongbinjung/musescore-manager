@@ -1,3 +1,5 @@
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -97,6 +99,7 @@ def normalize(ctx: typer.Context):
 def export_pngs(
     ctx: typer.Context,
     export_dir: Annotated[Path | None, typer.Option(help="Directory to export PNGs to")] = None,
+    jobs: Annotated[int, typer.Option(min=1, help="Maximum concurrent exports")] = 4,
 ):
     context = _context(ctx)
     configs = context.configs
@@ -119,12 +122,11 @@ def export_pngs(
     with Progress() as progress:
         task = progress.add_task("Exporting PNGs ...", total=len(mscz_paths))
 
-        for _path in mscz_paths:
-            if verbose:
-                progress.console.print(f"Exporting {_path}")
-
-            score = Score(path=_path)
-            if dryrun:
+        if dryrun:
+            for _path in mscz_paths:
+                if verbose:
+                    progress.console.print(f"Exporting {_path}")
+                score = Score(path=_path)
                 if export_dir is None:
                     pages = musescore.metadata(score).pages
                     if pages is None or pages < 1:
@@ -140,14 +142,53 @@ def export_pngs(
                             raise RuntimeError("MuseScore metadata did not include a positive page count")
                         scores_to_export += 1
                         pngs_to_export += pages
-            else:
-                assert export_dir is not None
-                results = to_pngs(score, musescore=musescore, key=None, base_dir=export_dir)
-                if verbose:
-                    for result in results:
-                        progress.console.print(f"\t{result}")
+                progress.advance(task)
+        else:
+            assert export_dir is not None
+            # Plan destination identities before starting MuseScore processes.
+            planned = [(path, Score(path)) for path in mscz_paths]
+            destinations: dict[str, list[Path]] = {}
+            for path, planned_score in planned:
+                target = planned_score.normalized_name(with_key=True, suffix="png")
+                destinations.setdefault(unicodedata.normalize("NFC", target), []).append(path)
+            collisions = {target: paths for target, paths in destinations.items() if len(paths) > 1}
+            if collisions:
+                for target, paths in collisions.items():
+                    typer.echo(f"Duplicate PNG target {target} for: {', '.join(str(path) for path in paths)}")
+                raise typer.Exit(code=1)
 
-            progress.advance(task)
+            results_by_index: list[list[Path] | Exception | None] = [None] * len(planned)
+
+            def run_export(item: tuple[Path, Score]) -> list[Path]:
+                _, planned_score = item
+                return to_pngs(
+                    planned_score,
+                    musescore=Musescore(configs.mscore_cmd()),
+                    key=None,
+                    base_dir=export_dir,
+                )
+
+            with ThreadPoolExecutor(max_workers=jobs) as executor:
+                futures = {executor.submit(run_export, item): index for index, item in enumerate(planned)}
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        results_by_index[index] = future.result()
+                    except Exception as error:
+                        results_by_index[index] = error
+
+            failures = 0
+            for index, result in enumerate(results_by_index):
+                progress.advance(task)
+                if isinstance(result, Exception):
+                    progress.console.print(f"Failed to export {planned[index][0].name}: {result}")
+                    failures += 1
+                    continue
+                if verbose and result:
+                    for output in result:
+                        progress.console.print(f"\t{output}")
+            if failures:
+                raise typer.Exit(code=1)
 
     if dryrun:
         progress.console.print(f"Would export {scores_to_export} scores and {pngs_to_export} PNGs.")
@@ -238,7 +279,11 @@ def sync_pngs(ctx: typer.Context):
 
 
 @app.command()
-def upload(ctx: typer.Context, bucket: str | None = None):
+def upload(
+    ctx: typer.Context,
+    bucket: str | None = None,
+    jobs: Annotated[int, typer.Option(min=1, help="Maximum concurrent uploads")] = 4,
+):
     context = _context(ctx)
     configs = context.configs
     dryrun = context.dryrun
@@ -264,40 +309,67 @@ def upload(ctx: typer.Context, bucket: str | None = None):
         typer.echo(f"Using bucket: {bucket}")
         typer.echo(f"Using S3 endpoint: {configs.aws_endpoint_url_s3()}")
 
+    planned: list[tuple[Path, Score, str]] = []
+    destinations: dict[str, list[Path]] = {}
+    for path in mscz_paths:
+        score = Score(path, read_metadata=True)
+        key = score.normalized_name(with_key=True)
+        planned.append((path, score, key))
+        destinations.setdefault(unicodedata.normalize("NFC", key), []).append(path)
+    collisions = {key: paths for key, paths in destinations.items() if len(paths) > 1}
+    if collisions:
+        for key, paths in collisions.items():
+            typer.echo(f"Duplicate S3 key {key} for: {', '.join(str(path) for path in paths)}")
+        raise typer.Exit(code=1)
+
     store = S3Store.connect(
         bucket=bucket,
         access_key_id=configs.aws_access_key_id(),
         secret_access_key=configs.aws_secret_access_key(),
         endpoint_url=configs.aws_endpoint_url_s3(),
+        max_pool_connections=jobs,
     )
-
     summary = {status: 0 for status in SyncStatus}
+    failures = 0
 
     with Progress() as progress:
         task = progress.add_task("Uploading scores...", total=len(mscz_paths))
+        results: list[tuple[str, SyncStatus | None, Exception | None]] = [(key, None, None) for _, _, key in planned]
 
-        for _path in mscz_paths:
-            score = Score(path=_path, read_metadata=True)
-            s3_key = score.normalized_name(with_key=True)
-            result = sync_file(store, score.absolute_path, s3_key, dryrun=dryrun)
-            summary[result.status] += 1
+        def run(item: tuple[Path, Score, str]) -> SyncStatus:
+            path, score, key = item
+            return sync_file(store, score.absolute_path, key, dryrun=dryrun).status
 
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+            futures = {executor.submit(run, item): index for index, item in enumerate(planned)}
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    results[index] = (planned[index][2], future.result(), None)
+                except Exception as error:
+                    results[index] = (planned[index][2], None, error)
+                progress.advance(task)
+
+        for index, (s3_key, status, error) in enumerate(results):
+            if error is not None:
+                progress.console.print(f"Failed to upload {planned[index][0].name}: {error}")
+                failures += 1
+                continue
+            assert status is not None
+            summary[status] += 1
             if verbose:
-                match result.status:
-                    case SyncStatus.CREATED:
+                match status:
+                    case SyncStatus.CREATED | SyncStatus.UPDATED:
                         action = "would upload" if dryrun else "uploading"
-                        progress.console.print(f"{s3_key} does not exist on S3; {action} new version")
-                    case SyncStatus.UPDATED:
-                        action = "would upload" if dryrun else "uploading"
-                        progress.console.print(f"{s3_key} differs from S3; {action} new version")
+                        progress.console.print(
+                            f"{s3_key} {'does not exist on S3' if status is SyncStatus.CREATED else 'differs from S3'}; {action} new version"
+                        )
                     case SyncStatus.UNCHANGED:
                         progress.console.print(f"{s3_key} on S3 is up to date; skipping upload")
                     case SyncStatus.REMOTE_NEWER:
                         progress.console.print(f"{s3_key} on S3 is newer; skipping upload")
                     case SyncStatus.CONFLICT:
                         progress.console.print(f"{s3_key} conflicts with S3 at the same timestamp; skipping upload")
-
-            progress.advance(task)
 
     if dryrun:
         progress.console.print(
@@ -306,6 +378,9 @@ def upload(ctx: typer.Context, bucket: str | None = None):
             f"skip {summary[SyncStatus.UNCHANGED] + summary[SyncStatus.REMOTE_NEWER]}, "
             f"and leave {summary[SyncStatus.CONFLICT]} conflicts."
         )
+
+    if failures:
+        raise typer.Exit(code=1)
 
 
 def _get_valid_mscz_paths(path: Path) -> list[Path]:
