@@ -177,8 +177,10 @@ def upload(ctx: typer.Context, bucket: str | None = None):
 
 def _get_valid_mscz_paths(path: Path) -> list[Path]:
     if path.is_dir():
-        mscz_paths = list(path.glob("*.mscz"))
-    elif path.is_file() and path.suffix == ".mscz":
+        mscz_paths = sorted(
+            candidate for candidate in path.iterdir() if candidate.is_file() and candidate.suffix.lower() == ".mscz"
+        )
+    elif path.is_file() and path.suffix.lower() == ".mscz":
         mscz_paths = [path]
     else:
         typer.echo(f"{path} is not a valid mscz file or directory")

@@ -1,15 +1,14 @@
 """Models and definitions for interacting with Musescore and Score objects"""
 
-import datetime
 import io
 import logging
 import xml.etree.ElementTree as ET
+from itertools import chain
 from pathlib import Path
-from typing import Self
+from typing import Iterable, Self
 from zipfile import ZipFile
 
 from msm.metadata import MscxParser, ScoreMetadata
-from msm.utils import make_camel_case
 
 
 class Score:
@@ -34,7 +33,7 @@ class Score:
         self._validate_path()
 
         self._metadata: ScoreMetadata | None = None
-        self._metadata_modified_at: datetime.datetime | None = None
+        self._metadata_modified_at: int | None = None
         if read_metadata:
             _ = self.metadata
 
@@ -63,28 +62,20 @@ class Score:
 
     @property
     def metadata(self) -> ScoreMetadata:
-        source_modified_at = self.source_modified_time
+        source_modified_at = self._path.stat().st_mtime_ns
         if self._metadata is None or self._metadata_modified_at != source_modified_at:
             self._metadata = self._parse_metadata_from_bytes()
             self._metadata_modified_at = source_modified_at
         return self._metadata
 
     @property
-    def source_modified_time(self) -> datetime.datetime:
+    def source_modified_time_ns(self) -> int:
         self._validate_path()
-        return datetime.datetime.fromtimestamp(self._path.stat().st_mtime)
-
-    @property
-    def source_modified_time_utc(self) -> datetime.datetime:
-        self._validate_path()
-        return datetime.datetime.fromtimestamp(self._path.stat().st_mtime, tz=datetime.timezone.utc)
+        return self._path.stat().st_mtime_ns
 
     @property
     def parent_dir(self) -> Path:
         return self._path.parent
-
-    def score_path(self, relative_to: str | Path = ".") -> str:
-        return str(self._path.relative_to(relative_to))
 
     @property
     def absolute_path(self) -> Path:
@@ -134,11 +125,11 @@ class Score:
         """
         metadata = self.metadata
         tokens = []
-        tokens.append(make_camel_case(metadata.title.strip(), extra_seps=remove_chars))
+        tokens.append(_make_camel_case(metadata.title.strip(), extra_seps=remove_chars))
         if with_key:
             tokens.append(str(metadata.keysig))
         if metadata.subtitle:
-            tokens.append(make_camel_case(metadata.subtitle, extra_seps=remove_chars))
+            tokens.append(_make_camel_case(metadata.subtitle, extra_seps=remove_chars))
         return f"{'-'.join(tokens)}.{suffix}"
 
     def _parse_metadata_from_bytes(self) -> ScoreMetadata:
@@ -162,3 +153,11 @@ class Score:
 
         if self._path.suffix.lower() != ".mscz":
             raise ValueError(f"Only supports '.mscz'; got {self._path.name}")
+
+
+def _make_camel_case(value: str, extra_seps: Iterable[str] | None = None) -> str:
+    tokens = value.split()
+    if extra_seps is not None:
+        for separator in extra_seps:
+            tokens = list(chain.from_iterable(token.split(separator) for token in tokens))
+    return "".join(token[0].upper() + token[1:] if token else "" for token in tokens)

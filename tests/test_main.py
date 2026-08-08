@@ -25,3 +25,14 @@ def test_upload_requires_bucket_before_connecting(monkeypatch, tmp_path):
 
     assert result.exit_code == 1
     assert "S3 bucket not set" in result.output
+
+
+def test_normalize_dryrun_accepts_uppercase_extension(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    score_path = tmp_path / "score.MSCZ"
+    write_score(score_path)
+
+    result = CliRunner().invoke(app, ["--path", str(score_path), "--dryrun", "normalize"])
+
+    assert result.exit_code == 0
+    assert str(score_path) in result.output

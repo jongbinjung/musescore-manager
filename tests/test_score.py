@@ -40,6 +40,19 @@ def test_metadata_cache_is_invalidated_when_source_changes(tmp_path):
     assert score.metadata.title == "Second"
 
 
+def test_metadata_cache_uses_nanosecond_file_identity(tmp_path):
+    path = tmp_path / "source.mscz"
+    write_score(path, "First")
+    score = Score(path)
+    assert score.metadata.title == "First"
+
+    original_mtime_ns = path.stat().st_mtime_ns
+    write_score(path, "Second")
+    os.utime(path, ns=(original_mtime_ns + 1, original_mtime_ns + 1))
+
+    assert score.metadata.title == "Second"
+
+
 def test_score_can_be_created_from_bytes(tmp_path):
     path = tmp_path / "source.mscz"
     source = tmp_path / "bytes.mscz"

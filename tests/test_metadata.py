@@ -49,3 +49,14 @@ def test_missing_key_defaults_to_c_major():
 
     with pytest.warns(RuntimeWarning, match="defaulting to C_MAJOR"):
         assert parser.keysig is Key.C_MAJOR
+
+
+def test_text_metadata_does_not_require_vbox():
+    parser = parse(
+        """<MuseScore version="4.0"><programVersion>4.4</programVersion><Score>
+        <metaTag name="workTitle">Title</metaTag><metaTag name="composer">Composer</metaTag>
+        </Score></MuseScore>"""
+    )
+
+    assert parser.text_metadata.title == "Title"
+    assert parser.text_metadata.composer == "Composer"

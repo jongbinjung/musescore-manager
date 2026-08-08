@@ -9,7 +9,6 @@ from typing import Protocol
 
 from msm.music import Key, ScoreTransposeConfigs
 from msm.score import Score
-from msm.utils import infer_page_number, last_modified_time_utc
 
 
 class MetadataWithPages(Protocol):
@@ -43,7 +42,7 @@ def to_pngs(score: Score, musescore: ScoreRenderer, key: Key | None = None, base
 
     """
     base_dir.mkdir(parents=True, exist_ok=True)
-    source_modified_time_utc = score.source_modified_time_utc
+    source_modified_time_ns = score.source_modified_time_ns
 
     with TemporaryDirectory(dir=base_dir) as temporary_directory:
         workspace = Path(temporary_directory)
@@ -69,7 +68,7 @@ def to_pngs(score: Score, musescore: ScoreRenderer, key: Key | None = None, base
         if (
             len(managed_outputs) == len(expected_outputs)
             and managed_names == expected_names
-            and all(last_modified_time_utc(managed_by_name[name]) > source_modified_time_utc for name in expected_names)
+            and all(managed_by_name[name].stat().st_mtime_ns > source_modified_time_ns for name in expected_names)
         ):
             logging.info("Target PNG(s) are up to date; skipping export")
             return []
@@ -99,7 +98,9 @@ def _expected_outputs(target: Path, pages: int) -> list[Path]:
 
 
 def _managed_outputs(target: Path) -> list[Path]:
-    pattern = re.compile(rf"^{re.escape(target.stem)}(?:-\d+(?:-of-\d+)?)?{re.escape(target.suffix)}$")
+    target_stem = unicodedata.normalize("NFC", target.stem)
+    target_suffix = unicodedata.normalize("NFC", target.suffix)
+    pattern = re.compile(rf"^{re.escape(target_stem)}(?:-\d+(?:-of-\d+)?)?{re.escape(target_suffix)}$")
     return [
         path
         for path in target.parent.iterdir()
@@ -115,7 +116,7 @@ def _rename_for_page_numbers(files: list[Path]) -> list[Path]:
     if len(files) <= 1:
         return _remove_numbers(files)
 
-    total_pages = max(infer_page_number(file.name) for file in files)
+    total_pages = max(_infer_page_number(file.name) for file in files)
 
     results = []
     for file in files:
@@ -127,7 +128,7 @@ def _rename_for_page_numbers(files: list[Path]) -> list[Path]:
 def _remove_numbers(files: list[Path]) -> list[Path]:
     results = []
     for file in files:
-        if infer_page_number(file.name) == 0:
+        if _infer_page_number(file.name) == 0:
             results.append(file)
             continue
         new_name = file.stem.rsplit("-", 1)[0] + file.suffix
@@ -138,3 +139,10 @@ def _remove_numbers(files: list[Path]) -> list[Path]:
 def _rename(path: Path, new_name: str) -> Path:
     new_path = path.parent / new_name
     return path.rename(new_path)
+
+
+def _infer_page_number(filename: str) -> int:
+    try:
+        return int(Path(filename).stem.split("-")[-1])
+    except ValueError:
+        return 0

@@ -7,13 +7,13 @@ import json
 import logging
 import subprocess
 import tempfile
+import unicodedata
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from msm.metadata import ScoreMetadata
 from msm.music import ScoreTransposeConfigs
-from msm.utils import normalize_unicode_filename
 
 if TYPE_CHECKING:
     from msm.score import Score
@@ -190,7 +190,7 @@ class Musescore:
         glob = f"{path.stem}*{path.suffix}"
         results = list(path.parent.glob(glob))
         if not results:
-            results = list(path.parent.glob(normalize_unicode_filename(glob)))
+            results = list(path.parent.glob(unicodedata.normalize("NFD", glob)))
         return results
 
     @staticmethod

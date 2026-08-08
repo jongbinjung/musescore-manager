@@ -3,7 +3,7 @@
 import warnings
 import xml.etree.ElementTree as ET
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, field_validator
 
 from msm.music import Key
 
@@ -60,19 +60,19 @@ class MscxParser:
                     text_metadata["title"] = metatag.text
 
         vbox = tree.find(".//VBox")
-        for text in vbox.findall(".//Text"):
-            value = text.find("./text").text
+        for text in vbox.findall(".//Text") if vbox is not None else []:
+            value_element = text.find("./text")
+            style_element = text.find("./style")
+            if value_element is None or style_element is None:
+                continue
+            value = value_element.text
             if value is None:
                 continue
-            match text.find("./style").text:
+            match style_element.text:
                 case "title" | "subtitle" | "composer" as key:
                     text_metadata[key] = value
 
-        try:
-            return TextMetadata(**text_metadata)
-        except ValidationError:
-            print(f"Failed to parse text metadata\n{text_metadata}")
-            raise
+        return TextMetadata(**text_metadata)
 
     def score_metadata(self) -> ScoreMetadata:
         return ScoreMetadata(

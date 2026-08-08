@@ -170,3 +170,31 @@ def test_unicode_normalized_output_is_published_with_canonical_name(tmp_path):
     results = to_pngs(Score(score_path), musescore=NormalizingMusescore(), base_dir=tmp_path / "pngs")
 
     assert results == [tmp_path / "pngs" / "Café-C.png"]
+
+
+def test_nfd_score_title_hits_unicode_equivalent_cache(tmp_path):
+    score_path = tmp_path / "score.mscz"
+    write_score(score_path, title=unicodedata.normalize("NFD", "Café"))
+    export_dir = tmp_path / "pngs"
+    musescore = FakeMusescore()
+
+    first = to_pngs(Score(score_path), musescore=musescore, base_dir=export_dir)
+    nfc_output = first[0].with_name(unicodedata.normalize("NFC", first[0].name))
+    first[0].rename(nfc_output)
+    newer_ns = score_path.stat().st_mtime_ns + 1
+    os.utime(nfc_output, ns=(newer_ns, newer_ns))
+
+    assert to_pngs(Score(score_path), musescore=musescore, base_dir=export_dir) == []
+
+
+def test_export_cache_uses_nanosecond_freshness(tmp_path):
+    score_path = tmp_path / "score.mscz"
+    write_score(score_path)
+    export_dir = tmp_path / "pngs"
+    export_dir.mkdir()
+    existing = export_dir / "TestScore-C.png"
+    existing.write_bytes(b"png")
+    newer_ns = score_path.stat().st_mtime_ns + 1
+    os.utime(existing, ns=(newer_ns, newer_ns))
+
+    assert to_pngs(Score(score_path), musescore=FakeMusescore(), base_dir=export_dir) == []
