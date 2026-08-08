@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import base64
-import datetime
 import json
 import logging
 import subprocess
+import tempfile
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from msm.config import Configs
+from msm.metadata import ScoreMetadata
 from msm.music import ScoreTransposeConfigs
 from msm.utils import normalize_unicode_filename
 
@@ -22,19 +22,14 @@ if TYPE_CHECKING:
 class Musescore:
     """API with Musescore CLI binary (mscore)"""
 
-    def __init__(self, configs: Configs = Configs()):
-        """Create a Musescore object
-
-        Args:
-            configs: Configs object; used to locate mscore binary (mscore_cmd)
-
-        """
-        self._mscore_cmd = configs.mscore_cmd()
+    def __init__(self, command: str = "mscore", runner: Callable = subprocess.run):
+        self._mscore_cmd = command
+        self._runner = runner
 
     def __repr__(self) -> str:
         return self._mscore_cmd
 
-    def conversion_job(self, jobs: list[dict[str, Path]], cleanup: bool = True) -> subprocess.CompletedProcess:
+    def conversion_job(self, jobs: list[dict[str, Path]]) -> dict[Path, list[Path]]:
         """Run a conversion batch job
 
         Args:
@@ -46,23 +41,14 @@ class Musescore:
                     },
                     ...
                 ]
-            cleanup: remove job config file after running
-
         Returns:
-            subprocess.CompletedProcess: object retrieved from the subprocess the executed the batch job; e.g.,
-
-            ```
-            CompletedProcess(
-                args=['mscore', '-F', '-j', 'path/to/config.json'],
-                returncode=0,
-                stdout=b'',
-                stderr=b'',
-            )
-            ```
+            Generated output paths keyed by input path.
         """
 
         # Convert paths to strings and keep a list of expected output paths
         jobs_strs = []
+        valid_jobs = []
+        previous_results = {}
         for job in jobs:
             try:
                 in_path = job["in"]
@@ -76,23 +62,22 @@ class Musescore:
                 logging.info("Creating parent directory for %s", out_path.parent)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
             jobs_strs.append({"in": str(in_path.absolute()), "out": str(out_path.absolute())})
+            valid_jobs.append(job)
+            previous_results[in_path] = self._snapshot_results(out_path)
 
-        job_configs = Path("_job_configs.json")
-        job_configs.write_text(json.dumps(jobs_strs))
+        if not valid_jobs:
+            return {}
 
-        now = datetime.datetime.now()
-
-        try:
-            _ = self._run_mscore("-j", str(job_configs.absolute()))
-        finally:
-            if cleanup:
-                job_configs.unlink()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            job_configs = Path(temporary_directory) / "jobs.json"
+            job_configs.write_text(json.dumps(jobs_strs))
+            self._run_mscore("-j", str(job_configs))
 
         results = {}
-        for job in jobs:
+        for job in valid_jobs:
             in_path = job["in"]
             out_path = job["out"]
-            results[in_path] = self._collect_results(out_path, since=now)
+            results[in_path] = self._collect_results(out_path, previous=previous_results.get(in_path, {}))
 
         return results
 
@@ -109,15 +94,14 @@ class Musescore:
         """
         path = Path(path)
 
-        now = datetime.datetime.now()
-
+        previous = self._snapshot_results(path)
         self._run_mscore("--export-to", str(path.absolute()), score=score)
 
-        return self._collect_results(path, since=now)
+        return self._collect_results(path, previous=previous)
 
-    def metadata(self, score: Score) -> dict:
+    def metadata(self, score: Score) -> ScoreMetadata:
         ret = self._run_mscore("--score-meta", score=score)
-        return json.loads(ret.stdout)["metadata"]
+        return ScoreMetadata(**json.loads(ret.stdout)["metadata"])
 
     def transpose(
         self,
@@ -164,12 +148,16 @@ class Musescore:
 
         for arg in args:
             cmd.append(arg)
-        ret = subprocess.run(cmd, capture_output=True)
+        ret = self._runner(cmd, capture_output=True)
         ret.check_returncode()
         return ret
 
-    @staticmethod
-    def _collect_results(path: Path | str, since: datetime.datetime | None = None) -> list[Path]:
+    @classmethod
+    def _snapshot_results(cls, path: Path | str) -> dict[Path, int]:
+        return {result: result.stat().st_mtime_ns for result in cls._matching_results(path)}
+
+    @classmethod
+    def _collect_results(cls, path: Path | str, previous: dict[Path, int] | None = None) -> list[Path]:
         """Collect results from a Musescore operation
 
         For certain outputs (e.g., png conversion), mscore will auto-generate filenames based on the specified output
@@ -181,27 +169,28 @@ class Musescore:
 
         Args:
             path: output path description
-            since: a timestamp; if specified, only files that have been modified after this time will be returned
+            previous: output modification times captured before running MuseScore
 
         Returns:
             list[Path]: List of paths to all exported files
 
         """
-        path = Path(path)
-
-        glob = f"{path.stem}*{path.suffix}"
-        results = [result for result in path.parent.glob(glob)]
-
-        if len(results) == 0:
-            # If no results are found, try to normalize the glob to account for Unicode normalization (e.g., MacOS)
-            glob = normalize_unicode_filename(glob)
-            results = [result for result in path.parent.glob(glob)]
-
-        if since is not None:
-            results = [r for r in results if since < datetime.datetime.fromtimestamp(r.stat().st_mtime)]
-
+        previous = previous or {}
+        results = [
+            result
+            for result in cls._matching_results(path)
+            if result not in previous or result.stat().st_mtime_ns != previous[result]
+        ]
         results.sort()
+        return results
 
+    @staticmethod
+    def _matching_results(path: Path | str) -> list[Path]:
+        path = Path(path)
+        glob = f"{path.stem}*{path.suffix}"
+        results = list(path.parent.glob(glob))
+        if not results:
+            results = list(path.parent.glob(normalize_unicode_filename(glob)))
         return results
 
     @staticmethod
@@ -209,8 +198,5 @@ class Musescore:
         path = score.absolute_path
         if not path.is_file():
             raise FileNotFoundError(f"{path.absolute()} is not a file or does not exist")
-
-        if path.suffix.lower() != ".mscz":
-            raise ValueError(f"Only supports '.mscz'; got {path.name}")
 
         return str(path)

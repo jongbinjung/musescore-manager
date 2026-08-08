@@ -9,14 +9,13 @@ from typing import Self
 from zipfile import ZipFile
 
 from msm.metadata import MscxParser, ScoreMetadata
-from msm.musescore import Musescore
 from msm.utils import make_camel_case
 
 
 class Score:
     """Score object that represents an mscz file"""
 
-    def __init__(self, path: Path | str, read_metadata: bool = False, musescore: Musescore | None = None):
+    def __init__(self, path: Path | str, read_metadata: bool = False):
         """Create a Score object that represents an mscz file
 
         Args:
@@ -38,10 +37,6 @@ class Score:
         self._metadata_modified_at: datetime.datetime | None = None
         if read_metadata:
             _ = self.metadata
-
-        if musescore is None:
-            musescore = Musescore()
-        self.musescore = musescore
 
     def __repr__(self) -> str:
         return f"Score({self._path.name})"
@@ -74,14 +69,6 @@ class Score:
             self._metadata_modified_at = source_modified_at
         return self._metadata
 
-    def update_metadata_from_mscore(self) -> ScoreMetadata:
-        source_modified_at = self.source_modified_time
-        if self._metadata is None or self._metadata.pages is None or self._metadata_modified_at != source_modified_at:
-            metadata_dict = self.musescore.metadata(self)
-            self._metadata = ScoreMetadata(**metadata_dict)
-            self._metadata_modified_at = source_modified_at
-        return self._metadata
-
     @property
     def source_modified_time(self) -> datetime.datetime:
         self._validate_path()
@@ -102,14 +89,6 @@ class Score:
     @property
     def absolute_path(self) -> Path:
         return self._path.absolute()
-
-    @property
-    def pages(self) -> int:
-        if self.metadata.pages is None:
-            self.update_metadata_from_mscore()
-        pages = self.metadata.pages
-        assert pages is not None
-        return pages
 
     def normalize(self, with_key: bool = False) -> Self:
         """Normalize the score name"""

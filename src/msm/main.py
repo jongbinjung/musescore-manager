@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -12,7 +13,21 @@ from msm.score import Score
 app = typer.Typer()
 
 
-def _validate_mscz_directory(path: Path | None):
+@dataclass
+class AppContext:
+    configs: Configs
+    dryrun: bool
+    path: Path | None
+    verbose: bool
+
+
+def _context(ctx: typer.Context) -> AppContext:
+    if not isinstance(ctx.obj, AppContext):
+        raise RuntimeError("Application context was not initialized")
+    return ctx.obj
+
+
+def _require_mscz_path(path: Path | None) -> Path:
     if path is None:
         typer.echo("mscz directory not set")
         raise typer.Exit(code=1)
@@ -20,6 +35,8 @@ def _validate_mscz_directory(path: Path | None):
     if not path.exists():
         typer.echo(f"mscz directory {path} does not exist")
         raise typer.Exit(code=1)
+
+    return path
 
 
 @app.callback()
@@ -32,26 +49,22 @@ def global_args(
 ):
     """Global options and arguments"""
     configs = Configs(profile_name=profile)
-    musescore = Musescore(configs=configs)
-
-    ctx.ensure_object(dict)
-    ctx.obj["configs"] = configs
-    ctx.obj["dryrun"] = dryrun
-    ctx.obj["musescore"] = musescore
-    ctx.obj["path"] = path or configs.local_mscz_directory()
-    ctx.obj["verbose"] = verbose
+    ctx.obj = AppContext(
+        configs=configs,
+        dryrun=dryrun,
+        path=path or configs.local_mscz_directory(),
+        verbose=verbose,
+    )
 
 
 @app.command()
 def normalize(ctx: typer.Context):
-    configs = ctx.obj.get("configs", Configs())
-    dryrun = ctx.obj.get("dryrun", True)
-    mscz_dir = ctx.obj.get("path", configs.local_mscz_directory())
-    musescore = ctx.obj.get("musescore", Musescore(configs))
-    verbose = ctx.obj.get("verbose", False)
+    context = _context(ctx)
+    dryrun = context.dryrun
+    mscz_dir = context.path
+    verbose = context.verbose
 
-    _validate_mscz_directory(mscz_dir)
-
+    mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
 
     with Progress() as progress:
@@ -62,7 +75,7 @@ def normalize(ctx: typer.Context):
                 progress.console.print(f"Normalizing {_path}")
 
             if not dryrun:
-                Score(path=_path, read_metadata=True, musescore=musescore).normalize()
+                Score(path=_path, read_metadata=True).normalize()
 
             progress.advance(task)
 
@@ -72,18 +85,21 @@ def export_pngs(
     ctx: typer.Context,
     export_dir: Annotated[Path | None, typer.Option(help="Directory to export PNGs to")] = None,
 ):
-    configs = ctx.obj.get("configs", Configs())
-    dryrun = ctx.obj.get("dryrun", True)
-    mscz_dir = ctx.obj.get("path", configs.local_mscz_directory())
-    musescore = ctx.obj.get("musescore", Musescore(configs))
-    verbose = ctx.obj.get("verbose", False)
+    context = _context(ctx)
+    configs = context.configs
+    dryrun = context.dryrun
+    mscz_dir = context.path
+    verbose = context.verbose
 
     if export_dir is None:
         export_dir = configs.local_png_directory()
+    if export_dir is None and not dryrun:
+        typer.echo("PNG export directory not set")
+        raise typer.Exit(code=1)
 
-    _validate_mscz_directory(mscz_dir)
-
+    mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
+    musescore = None if dryrun else Musescore(configs.mscore_cmd())
 
     with Progress() as progress:
         task = progress.add_task("Exporting PNGs ...", total=len(mscz_paths))
@@ -93,8 +109,10 @@ def export_pngs(
                 progress.console.print(f"Exporting {_path}")
 
             if not dryrun:
-                score = Score(path=_path, musescore=musescore)
-                results = to_pngs(score, key=None, base_dir=export_dir)
+                assert export_dir is not None
+                score = Score(path=_path)
+                assert musescore is not None
+                results = to_pngs(score, musescore=musescore, key=None, base_dir=export_dir)
                 if verbose:
                     for result in results:
                         progress.console.print(f"\t{result}")
@@ -107,12 +125,13 @@ def upload(ctx: typer.Context, bucket: str | None = None):
     import boto3
     from botocore.client import Config
 
-    configs = ctx.obj.get("configs", Configs())
+    context = _context(ctx)
+    configs = context.configs
+    dryrun = context.dryrun
+    mscz_dir = context.path
+    verbose = context.verbose
 
-    dryrun = ctx.obj.get("dryrun", True)
-    mscz_dir = ctx.obj.get("path", configs.local_mscz_directory())
-    verbose = ctx.obj.get("verbose", False)
-
+    mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
 
     if bucket is None:
@@ -143,7 +162,7 @@ def upload(ctx: typer.Context, bucket: str | None = None):
         task = progress.add_task("Uploading scores...", total=len(mscz_paths))
 
         for _path in mscz_paths:
-            score = Score(path=_path, read_metadata=True, musescore=Musescore(configs))
+            score = Score(path=_path, read_metadata=True)
             s3_key = score.normalized_name(with_key=True)
 
             upload = False

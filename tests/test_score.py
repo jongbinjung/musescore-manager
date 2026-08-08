@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 from zipfile import ZipFile
 
-from msm.music import Key
 from msm.score import Score
 
 
@@ -41,37 +40,11 @@ def test_metadata_cache_is_invalidated_when_source_changes(tmp_path):
     assert score.metadata.title == "Second"
 
 
-def test_musescore_metadata_can_initialize_an_empty_cache(tmp_path):
+def test_score_can_be_created_from_bytes(tmp_path):
     path = tmp_path / "source.mscz"
-    write_score(path)
+    source = tmp_path / "bytes.mscz"
+    write_score(source)
 
-    class FakeMusescore:
-        calls = 0
+    score = Score.from_bytes(source.read_bytes(), path)
 
-        def metadata(self, score):
-            self.calls += 1
-            return {
-                "title": "Test Score",
-                "subtitle": "",
-                "composer": "",
-                "keysig": Key.C_MAJOR,
-                "timesig": "4/4",
-                "measures": 1,
-                "lyrics": "",
-                "fileVersion": 40,
-                "mscoreVersion": "4.4",
-                "pages": 2,
-            }
-
-    musescore = FakeMusescore()
-    score = Score(path, musescore=musescore)
-
-    assert score.pages == 2
-    assert score.pages == 2
-    assert musescore.calls == 1
-
-    original_mtime = path.stat().st_mtime
-    os.utime(path, (original_mtime + 2, original_mtime + 2))
-
-    assert score.pages == 2
-    assert musescore.calls == 2
+    assert score.metadata.title == "Test Score"

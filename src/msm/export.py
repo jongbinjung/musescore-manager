@@ -1,16 +1,35 @@
 """Functions to export scores"""
 
 import logging
+import re
+import unicodedata
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Protocol
 
-from msm.utils import infer_page_number
-
-from .music import Key, ScoreTransposeConfigs
-from .score import Score
-from .utils import last_modified_time_utc
+from msm.music import Key, ScoreTransposeConfigs
+from msm.score import Score
+from msm.utils import infer_page_number, last_modified_time_utc
 
 
-def to_pngs(score: Score, key: Key | None = None, base_dir: Path = Path()) -> list[str]:
+class MetadataWithPages(Protocol):
+    pages: int | None
+
+
+class ScoreRenderer(Protocol):
+    def metadata(self, score: Score) -> MetadataWithPages: ...
+
+    def transpose(
+        self,
+        score: Score,
+        score_transpose_config: ScoreTransposeConfigs,
+        return_type: str,
+    ) -> bytes: ...
+
+    def export_to(self, score: Score, path: Path | str) -> list[Path]: ...
+
+
+def to_pngs(score: Score, musescore: ScoreRenderer, key: Key | None = None, base_dir: Path = Path()) -> list[Path]:
     """Export a score to PNG files, optionally transposing to a specified key before export
 
     If target PNGs already exist with a more recent timestamp than the score, this function will skip export and return
@@ -23,42 +42,73 @@ def to_pngs(score: Score, key: Key | None = None, base_dir: Path = Path()) -> li
         list of exported files paths
 
     """
-    tmp_score_path = base_dir / "_tmp_transposed.mscz"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    source_modified_time_utc = score.source_modified_time_utc
 
-    if key is not None and score.metadata.keysig != key:
-        # Create temporary transposed score
-        transpose_configs = ScoreTransposeConfigs(
-            mode="by_key",
-            direction="closest",
-            targetKey=key,
-        )
-        transposed_bytes = score.musescore.transpose(
-            score=score,
-            score_transpose_config=transpose_configs,
-            return_type="mscz",
-        )
-        score = Score.from_bytes(transposed_bytes, path=tmp_score_path)
+    with TemporaryDirectory(dir=base_dir) as temporary_directory:
+        workspace = Path(temporary_directory)
+        if key is not None and score.metadata.keysig != key:
+            transpose_configs = ScoreTransposeConfigs(mode="by_key", direction="closest", targetKey=key)
+            transposed_bytes = musescore.transpose(
+                score=score,
+                score_transpose_config=transpose_configs,
+                return_type="mscz",
+            )
+            score = Score.from_bytes(transposed_bytes, path=workspace / "transposed.mscz")
 
-    score_last_modified_time_utc = score.source_modified_time_utc
+        target_path = base_dir / score.normalized_name(with_key=True, suffix="png")
+        pages = musescore.metadata(score).pages
+        if pages is None or pages < 1:
+            raise RuntimeError("MuseScore metadata did not include a positive page count")
+        expected_outputs = _expected_outputs(target_path, pages)
+        managed_outputs = _managed_outputs(target_path)
+        expected_names = {_canonical_name(path) for path in expected_outputs}
+        managed_names = {_canonical_name(path) for path in managed_outputs}
+        managed_by_name = {_canonical_name(path): path for path in managed_outputs}
 
-    target_path = base_dir / score.normalized_name(with_key=True, suffix="png")
+        if (
+            len(managed_outputs) == len(expected_outputs)
+            and managed_names == expected_names
+            and all(last_modified_time_utc(managed_by_name[name]) > source_modified_time_utc for name in expected_names)
+        ):
+            logging.info("Target PNG(s) are up to date; skipping export")
+            return []
 
-    try:
-        png_last_modified_time_utc = max(map(last_modified_time_utc, base_dir.glob(f"{target_path.stem}*.png")))
-    except ValueError as e:
-        if "max()" in str(e):
-            png_last_modified_time_utc = None
+        files = musescore.export_to(score, path=workspace / target_path.name)
+        generated = _rename_for_page_numbers(files)
+        generated_names = {_canonical_name(path) for path in generated}
+        if expected_names and generated_names != expected_names:
+            raise RuntimeError(f"MuseScore generated {sorted(generated_names)}; expected {sorted(expected_names)}")
 
-    if png_last_modified_time_utc is not None and png_last_modified_time_utc > score_last_modified_time_utc:
-        logging.info("Target PNG(s) are up to date; skipping export")
-        tmp_score_path.unlink(missing_ok=True)
-        return []
+        expected_by_name = {_canonical_name(path): path for path in expected_outputs}
+        results = []
+        for generated_file in generated:
+            destination = expected_by_name[_canonical_name(generated_file)]
+            generated_file.replace(destination)
+            results.append(destination)
 
-    files = score.musescore.export_to(score, path=base_dir / score.normalized_name(with_key=True, suffix="png"))
+        for obsolete in set(managed_outputs) - set(results):
+            obsolete.unlink()
+        return results
 
-    # Clean up
-    tmp_score_path.unlink(missing_ok=True)
-    return _rename_for_page_numbers(files)
+
+def _expected_outputs(target: Path, pages: int) -> list[Path]:
+    if pages == 1:
+        return [target]
+    return [target.with_stem(f"{target.stem}-{page}-of-{pages}") for page in range(1, pages + 1)]
+
+
+def _managed_outputs(target: Path) -> list[Path]:
+    pattern = re.compile(rf"^{re.escape(target.stem)}(?:-\d+(?:-of-\d+)?)?{re.escape(target.suffix)}$")
+    return [
+        path
+        for path in target.parent.iterdir()
+        if path.is_file() and pattern.fullmatch(unicodedata.normalize("NFC", path.name))
+    ]
+
+
+def _canonical_name(path: Path) -> str:
+    return unicodedata.normalize("NFC", path.name)
 
 
 def _rename_for_page_numbers(files: list[Path]) -> list[Path]:
