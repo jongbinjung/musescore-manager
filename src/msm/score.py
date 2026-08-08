@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Self
 from zipfile import ZipFile
 
-from msm.models import ScoreMetadata
+from msm.metadata import MscxParser, ScoreMetadata
 from msm.musescore import Musescore
-from msm.music_xml import MusicXMLParser
 from msm.utils import make_camel_case
 
 
@@ -35,7 +34,8 @@ class Score:
         self._path = Path(path)
         self._validate_path()
 
-        self._metadata = None
+        self._metadata: ScoreMetadata | None = None
+        self._metadata_modified_at: datetime.datetime | None = None
         if read_metadata:
             _ = self.metadata
 
@@ -68,15 +68,18 @@ class Score:
 
     @property
     def metadata(self) -> ScoreMetadata:
-        if self._metadata is None or self._metadata.updated_at < self.source_modified_time:
+        source_modified_at = self.source_modified_time
+        if self._metadata is None or self._metadata_modified_at != source_modified_at:
             self._metadata = self._parse_metadata_from_bytes()
+            self._metadata_modified_at = source_modified_at
         return self._metadata
 
     def update_metadata_from_mscore(self) -> ScoreMetadata:
-        if self._metadata.pages is None or self._metadata.updated_at < self.source_modified_time:
+        source_modified_at = self.source_modified_time
+        if self._metadata is None or self._metadata.pages is None or self._metadata_modified_at != source_modified_at:
             metadata_dict = self.musescore.metadata(self)
-            metadata = ScoreMetadata(**metadata_dict)
-            self._metadata = metadata
+            self._metadata = ScoreMetadata(**metadata_dict)
+            self._metadata_modified_at = source_modified_at
         return self._metadata
 
     @property
@@ -104,7 +107,9 @@ class Score:
     def pages(self) -> int:
         if self.metadata.pages is None:
             self.update_metadata_from_mscore()
-        return self.metadata.pages
+        pages = self.metadata.pages
+        assert pages is not None
+        return pages
 
     def normalize(self, with_key: bool = False) -> Self:
         """Normalize the score name"""
@@ -170,7 +175,7 @@ class Score:
                 with z.open(_files[0], mode="r") as f:
                     tree = ET.parse(f)
 
-        return MusicXMLParser(tree).score_metadata()
+        return MscxParser(tree).score_metadata()
 
     def _validate_path(self):
         if not self._path.is_file():

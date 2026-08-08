@@ -5,7 +5,7 @@ from pathlib import Path
 
 from msm.utils import infer_page_number
 
-from .musescore import Key, ScoreTransposeConfigs
+from .music import Key, ScoreTransposeConfigs
 from .score import Score
 from .utils import last_modified_time_utc
 
