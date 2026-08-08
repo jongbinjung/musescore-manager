@@ -8,6 +8,7 @@ from rich.progress import Progress
 from msm.config import Configs
 from msm.export import to_pngs
 from msm.musescore import Musescore
+from msm.s3 import S3Store, SyncStatus, sync_file
 from msm.score import Score
 
 app = typer.Typer()
@@ -122,9 +123,6 @@ def export_pngs(
 
 @app.command()
 def upload(ctx: typer.Context, bucket: str | None = None):
-    import boto3
-    from botocore.client import Config
-
     context = _context(ctx)
     configs = context.configs
     dryrun = context.dryrun
@@ -136,27 +134,20 @@ def upload(ctx: typer.Context, bucket: str | None = None):
 
     if bucket is None:
         bucket = configs.mscz_bucket_name()
+    if bucket is None:
+        typer.echo("S3 bucket not set")
+        raise typer.Exit(code=1)
 
     if verbose:
         typer.echo(f"Using bucket: {bucket}")
         typer.echo(f"Using S3 endpoint: {configs.aws_endpoint_url_s3()}")
 
-    # Create S3 service client
-    svc = boto3.client(
-        "s3",
-        aws_access_key_id=configs.aws_access_key_id(),
-        aws_secret_access_key=configs.aws_secret_access_key(),
+    store = S3Store.connect(
+        bucket=bucket,
+        access_key_id=configs.aws_access_key_id(),
+        secret_access_key=configs.aws_secret_access_key(),
         endpoint_url=configs.aws_endpoint_url_s3(),
-        config=Config(s3={"addressing_style": "virtual"}),
     )
-
-    paginator = svc.get_paginator("list_objects_v2")
-
-    last_modified = {}
-    for page in paginator.paginate(Bucket=bucket):
-        if "Contents" in page:
-            for obj in page["Contents"]:
-                last_modified[obj["Key"]] = obj["LastModified"]
 
     with Progress() as progress:
         task = progress.add_task("Uploading scores...", total=len(mscz_paths))
@@ -164,28 +155,22 @@ def upload(ctx: typer.Context, bucket: str | None = None):
         for _path in mscz_paths:
             score = Score(path=_path, read_metadata=True)
             s3_key = score.normalized_name(with_key=True)
+            result = sync_file(store, score.absolute_path, s3_key, dryrun=dryrun)
 
-            upload = False
-            if s3_key not in last_modified:
-                upload = True
-                if verbose or dryrun:
-                    progress.console.print(f"{s3_key} does not exist on S3; uploading new version")
-            else:
-                if last_modified[s3_key] < score.source_modified_time_utc:
-                    upload = True
-                    if verbose or dryrun:
-                        progress.console.print(f"{s3_key} is newer than S3 version; uploading new version")
-                else:
-                    upload = False
-                    if verbose or dryrun:
+            if verbose or dryrun:
+                match result.status:
+                    case SyncStatus.CREATED:
+                        action = "would upload" if dryrun else "uploading"
+                        progress.console.print(f"{s3_key} does not exist on S3; {action} new version")
+                    case SyncStatus.UPDATED:
+                        action = "would upload" if dryrun else "uploading"
+                        progress.console.print(f"{s3_key} differs from S3; {action} new version")
+                    case SyncStatus.UNCHANGED:
                         progress.console.print(f"{s3_key} on S3 is up to date; skipping upload")
-
-            if not dryrun and upload:
-                svc.upload_file(
-                    Filename=str(score.absolute_path),
-                    Bucket=bucket,
-                    Key=s3_key,
-                )
+                    case SyncStatus.REMOTE_NEWER:
+                        progress.console.print(f"{s3_key} on S3 is newer; skipping upload")
+                    case SyncStatus.CONFLICT:
+                        progress.console.print(f"{s3_key} conflicts with S3 at the same timestamp; skipping upload")
 
             progress.advance(task)
 

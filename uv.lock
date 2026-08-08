@@ -317,7 +317,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", marker = "extra == 's3'" },
+    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.42.39" },
     { name = "captainplanet" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "typer", specifier = ">=0.21.1" },
