@@ -6,7 +6,7 @@ import typer
 from rich.progress import Progress
 
 from msm.config import Configs
-from msm.export import to_pngs
+from msm.export import png_export_status, to_pngs
 from msm.musescore import Musescore
 from msm.s3 import S3Store, SyncStatus, sync_file
 from msm.score import Score
@@ -75,18 +75,22 @@ def normalize(ctx: typer.Context):
 
     mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
+    scores_to_normalize = len(mscz_paths)
 
     with Progress() as progress:
         task = progress.add_task("Normalizing scores...", total=len(mscz_paths))
 
         for _path in mscz_paths:
-            if verbose or dryrun:
+            if verbose:
                 progress.console.print(f"Normalizing {_path}")
 
             if not dryrun:
                 Score(path=_path, read_metadata=True).normalize()
 
             progress.advance(task)
+
+    if dryrun:
+        progress.console.print(f"Would normalize {scores_to_normalize} scores.")
 
 
 @app.command()
@@ -108,25 +112,45 @@ def export_pngs(
 
     mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
-    musescore = None if dryrun else Musescore(configs.mscore_cmd())
+    musescore = Musescore(configs.mscore_cmd())
+    scores_to_export = 0
+    pngs_to_export = 0
 
     with Progress() as progress:
         task = progress.add_task("Exporting PNGs ...", total=len(mscz_paths))
 
         for _path in mscz_paths:
-            if verbose or dryrun:
+            if verbose:
                 progress.console.print(f"Exporting {_path}")
 
-            if not dryrun:
+            score = Score(path=_path)
+            if dryrun:
+                if export_dir is None:
+                    pages = musescore.metadata(score).pages
+                    if pages is None or pages < 1:
+                        raise RuntimeError("MuseScore metadata did not include a positive page count")
+                    scores_to_export += 1
+                    pngs_to_export += pages
+                else:
+                    target_path = export_dir / score.normalized_name(with_key=True, suffix="png")
+                    expected, _, up_to_date = png_export_status(score, target_path)
+                    if not up_to_date:
+                        pages = musescore.metadata(score).pages
+                        if pages is None or pages < 1:
+                            raise RuntimeError("MuseScore metadata did not include a positive page count")
+                        scores_to_export += 1
+                        pngs_to_export += pages
+            else:
                 assert export_dir is not None
-                score = Score(path=_path)
-                assert musescore is not None
                 results = to_pngs(score, musescore=musescore, key=None, base_dir=export_dir)
                 if verbose:
                     for result in results:
                         progress.console.print(f"\t{result}")
 
             progress.advance(task)
+
+    if dryrun:
+        progress.console.print(f"Would export {scores_to_export} scores and {pngs_to_export} PNGs.")
 
 
 @app.command()
@@ -158,6 +182,8 @@ def sync_pngs(ctx: typer.Context):
     png_files = sorted(path for path in png_dir.iterdir() if path.is_file() and path.suffix.lower() == ".png")
     if not png_files:
         typer.echo("No PNG files found")
+        if dryrun:
+            typer.echo("Would sync 0 PNGs.")
         return
 
     try:
@@ -167,12 +193,13 @@ def sync_pngs(ctx: typer.Context):
         raise typer.Exit(code=1)
 
     failures = 0
+    summary = {status: 0 for status in ("created", "updated", "skipped", "would_create", "would_update", "conflict")}
 
     with Progress() as progress:
         task = progress.add_task("Syncing PNGs...", total=len(png_files))
 
         for filepath in png_files:
-            if verbose or dryrun:
+            if verbose:
                 progress.console.print(f"Syncing {filepath.name}")
 
             try:
@@ -186,7 +213,9 @@ def sync_pngs(ctx: typer.Context):
                     "conflict": "Conflict",
                 }
                 detail = f": {result.error}" if result.error else ""
-                progress.console.print(f"  {labels[result.status.value]} {filepath.name}{detail}")
+                if verbose or not dryrun:
+                    progress.console.print(f"  {labels[result.status.value]} {filepath.name}{detail}")
+                summary[result.status.value] += 1
                 if result.status.value == "conflict":
                     failures += 1
             except Exception as e:
@@ -194,6 +223,15 @@ def sync_pngs(ctx: typer.Context):
                 failures += 1
 
             progress.advance(task)
+
+    if dryrun:
+        progress.console.print(
+            "Would sync: "
+            f"{summary['would_create']} create, "
+            f"{summary['would_update']} update, "
+            f"{summary['skipped']} skipped, "
+            f"{summary['conflict']} conflicts."
+        )
 
     if failures:
         raise typer.Exit(code=1)
@@ -209,6 +247,12 @@ def upload(ctx: typer.Context, bucket: str | None = None):
 
     mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
+
+    if not mscz_paths:
+        typer.echo("No MSCZ files found")
+        if dryrun:
+            typer.echo("Would upload 0 scores.")
+        return
 
     if bucket is None:
         bucket = configs.mscz_bucket_name()
@@ -227,6 +271,8 @@ def upload(ctx: typer.Context, bucket: str | None = None):
         endpoint_url=configs.aws_endpoint_url_s3(),
     )
 
+    summary = {status: 0 for status in SyncStatus}
+
     with Progress() as progress:
         task = progress.add_task("Uploading scores...", total=len(mscz_paths))
 
@@ -234,8 +280,9 @@ def upload(ctx: typer.Context, bucket: str | None = None):
             score = Score(path=_path, read_metadata=True)
             s3_key = score.normalized_name(with_key=True)
             result = sync_file(store, score.absolute_path, s3_key, dryrun=dryrun)
+            summary[result.status] += 1
 
-            if verbose or dryrun:
+            if verbose:
                 match result.status:
                     case SyncStatus.CREATED:
                         action = "would upload" if dryrun else "uploading"
@@ -251,6 +298,14 @@ def upload(ctx: typer.Context, bucket: str | None = None):
                         progress.console.print(f"{s3_key} conflicts with S3 at the same timestamp; skipping upload")
 
             progress.advance(task)
+
+    if dryrun:
+        progress.console.print(
+            "Would upload "
+            f"{summary[SyncStatus.CREATED] + summary[SyncStatus.UPDATED]} scores, "
+            f"skip {summary[SyncStatus.UNCHANGED] + summary[SyncStatus.REMOTE_NEWER]}, "
+            f"and leave {summary[SyncStatus.CONFLICT]} conflicts."
+        )
 
 
 def _get_valid_mscz_paths(path: Path) -> list[Path]:

@@ -56,6 +56,25 @@ def test_skips_export_when_existing_output_is_newer(tmp_path):
     assert to_pngs(Score(score_path), musescore=FakeMusescore(), base_dir=export_dir) == []
 
 
+def test_current_cache_does_not_query_musescore_metadata(tmp_path):
+    score_path = tmp_path / "score.mscz"
+    write_score(score_path)
+    export_dir = tmp_path / "pngs"
+    export_dir.mkdir()
+    existing = export_dir / "TestScore-C.png"
+    existing.write_bytes(b"png")
+    os.utime(existing, ns=(score_path.stat().st_mtime_ns + 1,) * 2)
+
+    class NoMetadataMusescore(FakeMusescore):
+        def metadata(self, score):
+            raise AssertionError("metadata should not be queried for a current cache")
+
+        def export_to(self, score, path):
+            raise AssertionError("export should be skipped for a current cache")
+
+    assert to_pngs(Score(score_path), musescore=NoMetadataMusescore(), base_dir=export_dir) == []
+
+
 def test_incomplete_page_set_is_reexported_and_stale_pages_are_removed(tmp_path):
     score_path = tmp_path / "score.mscz"
     write_score(score_path)
@@ -146,13 +165,24 @@ def test_missing_page_count_does_not_replace_previous_outputs(tmp_path):
     export_dir.mkdir()
     existing = export_dir / "TestScore-C.png"
     existing.write_bytes(b"old")
-    musescore = FakeMusescore()
-    musescore.pages = None
 
-    with pytest.raises(RuntimeError, match="positive page count"):
-        to_pngs(Score(score_path), musescore=musescore, base_dir=export_dir)
+    older = score_path.stat().st_mtime_ns - 1
+    os.utime(existing, ns=(older, older))
 
-    assert existing.read_bytes() == b"old"
+    class NoMetadataMusescore(FakeMusescore):
+        pages = None
+
+        def metadata(self, score):
+            raise AssertionError("metadata should not be needed for an export")
+
+        def export_to(self, score, path):
+            path.with_stem(path.stem + "-1").write_bytes(b"new")
+            return [path.with_stem(path.stem + "-1")]
+
+    results = to_pngs(Score(score_path), musescore=NoMetadataMusescore(), base_dir=export_dir)
+
+    assert results == [existing]
+    assert existing.read_bytes() == b"new"
 
 
 def test_unicode_normalized_output_is_published_with_canonical_name(tmp_path):

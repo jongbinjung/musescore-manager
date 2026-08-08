@@ -56,22 +56,22 @@ def to_pngs(score: Score, musescore: ScoreRenderer, key: Key | None = None, base
             score = Score.from_bytes(transposed_bytes, path=workspace / "transposed.mscz")
 
         target_path = base_dir / score.normalized_name(with_key=True, suffix="png")
-        pages = musescore.metadata(score).pages
-        if pages is None or pages < 1:
-            raise RuntimeError("MuseScore metadata did not include a positive page count")
-        expected_outputs = _expected_outputs(target_path, pages)
-        managed_outputs = _managed_outputs(target_path)
-        expected_names = {_canonical_name(path) for path in expected_outputs}
-        managed_names = {_canonical_name(path) for path in managed_outputs}
-        managed_by_name = {_canonical_name(path): path for path in managed_outputs}
+        expected_outputs, managed_outputs, up_to_date = png_export_status(score, target_path, source_modified_time_ns)
 
-        if (
-            len(managed_outputs) == len(expected_outputs)
-            and managed_names == expected_names
-            and all(managed_by_name[name].stat().st_mtime_ns > source_modified_time_ns for name in expected_names)
-        ):
+        if up_to_date:
             logging.info("Target PNG(s) are up to date; skipping export")
             return []
+
+        # A stale multi-page cache needs a fresh page count to protect the old
+        # page set from a partial export. A single-page cache can be checked
+        # against the generated result without another MuseScore invocation.
+        if len(expected_outputs) > 1:
+            pages = musescore.metadata(score).pages
+            if pages is None or pages < 1:
+                raise RuntimeError("MuseScore metadata did not include a positive page count")
+            expected_outputs = _expected_outputs(target_path, pages)
+
+        expected_names = {_canonical_name(path) for path in expected_outputs}
 
         files = musescore.export_to(score, path=workspace / target_path.name)
         generated = _rename_for_page_numbers(files)
@@ -82,13 +82,53 @@ def to_pngs(score: Score, musescore: ScoreRenderer, key: Key | None = None, base
         expected_by_name = {_canonical_name(path): path for path in expected_outputs}
         results = []
         for generated_file in generated:
-            destination = expected_by_name[_canonical_name(generated_file)]
+            destination = expected_by_name.get(
+                _canonical_name(generated_file), base_dir / unicodedata.normalize("NFC", generated_file.name)
+            )
             generated_file.replace(destination)
             results.append(destination)
 
         for obsolete in set(managed_outputs) - set(results):
             obsolete.unlink()
         return results
+
+
+def png_export_status(
+    score: Score, target_path: Path, source_modified_time_ns: int | None = None
+) -> tuple[list[Path], list[Path], bool]:
+    """Return expected outputs, managed outputs, and whether the export is current."""
+    managed_outputs = _managed_outputs(target_path)
+    source_modified_time_ns = source_modified_time_ns or score.source_modified_time_ns
+
+    # A current, consistently named cache is enough to skip MuseScore. Page count
+    # metadata is not needed because the page names record the count themselves.
+    cached_outputs = _cached_outputs(target_path, managed_outputs)
+    up_to_date = bool(cached_outputs) and all(
+        output.stat().st_mtime_ns > source_modified_time_ns for output in cached_outputs
+    )
+    return cached_outputs, managed_outputs, up_to_date
+
+
+def _cached_outputs(target: Path, managed_outputs: list[Path]) -> list[Path]:
+    if len(managed_outputs) == 1 and _canonical_name(managed_outputs[0]) == _canonical_name(target):
+        return managed_outputs
+    if not managed_outputs:
+        return []
+
+    page_sets: dict[int, set[int]] = {}
+    for output in managed_outputs:
+        match = re.search(r"-(\d+)-of-(\d+)\.png$", unicodedata.normalize("NFC", output.name))
+        if match is None:
+            return []
+        page, total = (int(value) for value in match.groups())
+        page_sets.setdefault(total, set()).add(page)
+
+    if len(page_sets) != 1:
+        return []
+    total, pages = next(iter(page_sets.items()))
+    if total < 2 or pages != set(range(1, total + 1)) or len(managed_outputs) != total:
+        return []
+    return managed_outputs
 
 
 def _expected_outputs(target: Path, pages: int) -> list[Path]:
@@ -98,6 +138,8 @@ def _expected_outputs(target: Path, pages: int) -> list[Path]:
 
 
 def _managed_outputs(target: Path) -> list[Path]:
+    if not target.parent.is_dir():
+        return []
     target_stem = unicodedata.normalize("NFC", target.stem)
     target_suffix = unicodedata.normalize("NFC", target.suffix)
     pattern = re.compile(rf"^{re.escape(target_stem)}(?:-\d+(?:-of-\d+)?)?{re.escape(target_suffix)}$")

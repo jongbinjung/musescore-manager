@@ -90,6 +90,21 @@ def test_sync_pngs_passes_dryrun_and_reports_status(cli_runner, configs, tmp_pat
 
     assert result.exit_code == 0
     session.sync_file.assert_called_once_with(path, dryrun=True)
+    assert "Would create score.png" not in result.stdout
+    assert "Would sync: 1 create, 0 update, 0 skipped, 0 conflicts." in result.stdout
+
+
+def test_sync_pngs_dryrun_is_verbose_with_flag(cli_runner, configs, tmp_path):
+    configs.local_png_directory.return_value = tmp_path
+    path = tmp_path / "score.png"
+    path.write_bytes(b"png")
+    session = MagicMock()
+    session.sync_file.return_value = SyncResult(path, SyncStatus.WOULD_CREATE)
+
+    with patch("msm.main.Configs", return_value=configs), patch("msm.main._create_drive_session", return_value=session):
+        result = cli_runner.invoke(app, ["--dryrun", "-v", "sync-pngs"])
+
+    assert result.exit_code == 0
     assert "Would create score.png" in result.stdout
 
 
