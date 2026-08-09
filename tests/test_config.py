@@ -17,6 +17,7 @@ def clean_environment(monkeypatch):
         "LOCAL_PNG_DIRECTORY",
         "MSCORE_CMD",
         "MSCZ_BUCKET_NAME",
+        "JOBS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -48,6 +49,25 @@ def test_missing_value_uses_default(monkeypatch, tmp_path):
 
     assert Configs().mscore_cmd() == "mscore"
     assert Configs().mscz_bucket_name() is None
+    assert Configs().jobs() == 4
+
+
+def test_jobs_can_be_configured_by_profile_or_environment(monkeypatch, tmp_path):
+    write_config(tmp_path, "[work]\nJOBS=6\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert Configs(profile_name="work").jobs() == 6
+
+    monkeypatch.setenv("JOBS", "8")
+    assert Configs(profile_name="work").jobs() == 8
+
+
+def test_jobs_must_be_positive(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("JOBS", "0")
+
+    with pytest.raises(ValueError, match="JOBS must be at least 1"):
+        Configs().jobs()
 
 
 def test_missing_profile_is_reported(monkeypatch, tmp_path):

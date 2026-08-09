@@ -18,6 +18,7 @@
     LOCAL_MSCZ_DIRECTORY=<Local path to where .mscz files are stored>
     LOCAL_PNG_DIRECTORY=<Local path to where PNG files are exported>
     MSCORE_CMD=<MuseScore command; defaults to mscore>
+    JOBS=<Default maximum number of concurrent exports and uploads; defaults to 4>
 
     GOOGLE_DRIVE_FOLDER_ID=<Google Drive destination folder ID>
     GOOGLE_APP_CREDENTIALS_JSON_PATH=<Path to Google OAuth client credentials JSON>
@@ -49,6 +50,9 @@ Preview synchronization with:
 ```bash
 uv run msm --dryrun sync-pngs
 ```
+
+`export-pngs` and `upload` run up to `JOBS` tasks concurrently by default. Override the configured value for a single
+command with `--jobs`, for example `uv run msm --path ./scores upload --jobs 2`.
 
 The command compares PNG checksums with app-managed files in the configured folder. Unchanged files are skipped,
 changed files are updated, and missing files are created. A same-name file not managed by this application, or

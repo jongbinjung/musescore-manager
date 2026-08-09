@@ -99,13 +99,17 @@ def normalize(ctx: typer.Context):
 def export_pngs(
     ctx: typer.Context,
     export_dir: Annotated[Path | None, typer.Option(help="Directory to export PNGs to")] = None,
-    jobs: Annotated[int, typer.Option(min=1, help="Maximum concurrent exports")] = 4,
+    jobs: Annotated[
+        int | None,
+        typer.Option(min=1, help="Maximum concurrent exports (defaults to JOBS in the config file, or 4)"),
+    ] = None,
 ):
     context = _context(ctx)
     configs = context.configs
     dryrun = context.dryrun
     mscz_dir = context.path
     verbose = context.verbose
+    jobs = jobs if jobs is not None else configs.jobs()
 
     if export_dir is None:
         export_dir = configs.local_png_directory()
@@ -120,7 +124,7 @@ def export_pngs(
     pngs_to_export = 0
 
     with Progress() as progress:
-        task = progress.add_task("Exporting PNGs ...", total=len(mscz_paths))
+        task = progress.add_task(f"Exporting PNGs ({jobs} jobs) ...", total=len(mscz_paths))
 
         if dryrun:
             for _path in mscz_paths:
@@ -176,10 +180,10 @@ def export_pngs(
                         results_by_index[index] = future.result()
                     except Exception as error:
                         results_by_index[index] = error
+                    progress.advance(task)
 
             failures = 0
             for index, result in enumerate(results_by_index):
-                progress.advance(task)
                 if isinstance(result, Exception):
                     progress.console.print(f"Failed to export {planned[index][0].name}: {result}")
                     failures += 1
@@ -282,13 +286,17 @@ def sync_pngs(ctx: typer.Context):
 def upload(
     ctx: typer.Context,
     bucket: str | None = None,
-    jobs: Annotated[int, typer.Option(min=1, help="Maximum concurrent uploads")] = 4,
+    jobs: Annotated[
+        int | None,
+        typer.Option(min=1, help="Maximum concurrent uploads (defaults to JOBS in the config file, or 4)"),
+    ] = None,
 ):
     context = _context(ctx)
     configs = context.configs
     dryrun = context.dryrun
     mscz_dir = context.path
     verbose = context.verbose
+    jobs = jobs if jobs is not None else configs.jobs()
 
     mscz_dir = _require_mscz_path(mscz_dir)
     mscz_paths = _get_valid_mscz_paths(mscz_dir)
@@ -333,7 +341,7 @@ def upload(
     failures = 0
 
     with Progress() as progress:
-        task = progress.add_task("Uploading scores...", total=len(mscz_paths))
+        task = progress.add_task(f"Uploading scores ({jobs} jobs)...", total=len(mscz_paths))
         results: list[tuple[str, SyncStatus | None, Exception | None]] = [(key, None, None) for _, _, key in planned]
 
         def run(item: tuple[Path, Score, str]) -> SyncStatus:

@@ -22,6 +22,7 @@ LOCAL_PNG_DIRECTORY = EnvironmentVariable("LOCAL_PNG_DIRECTORY", lambda value: P
 
 MSCORE_CMD = EnvironmentVariable("MSCORE_CMD", str)
 MSCZ_BUCKET_NAME = EnvironmentVariable("MSCZ_BUCKET_NAME", str)
+JOBS = EnvironmentVariable("JOBS", int)
 
 T = TypeVar("T")
 
@@ -94,3 +95,10 @@ class Configs:
 
     def mscz_bucket_name(self) -> str | None:
         return read_value(MSCZ_BUCKET_NAME, profile_name=self.profile_name)
+
+    def jobs(self) -> int:
+        value = read_value(JOBS, profile_name=self.profile_name, default_value=4)
+        assert value is not None
+        if value < 1:
+            raise ValueError("JOBS must be at least 1")
+        return value
