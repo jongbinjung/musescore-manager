@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
-from msm.config import Configs, DriveTargetConfig, S3TargetConfig, TargetConfig
+from msm.config import PROFILE_FIELDS, TARGET_NAME, Configs, DriveTargetConfig, S3TargetConfig, TargetConfig
 from msm.export import png_export_status, to_pngs
 from msm.gdrive import DriveSession
 from msm.musescore import Musescore
@@ -23,10 +23,12 @@ normalize_app = typer.Typer(no_args_is_help=True, help="Normalize local files.")
 export_app = typer.Typer(no_args_is_help=True, help="Export local files to another format.")
 sync_app = typer.Typer(no_args_is_help=True, help="Synchronize local files to a remote target.")
 targets_app = typer.Typer(invoke_without_command=True, help="Manage configured remote targets.")
+profiles_app = typer.Typer(invoke_without_command=True, help="Manage configuration profiles.")
 app.add_typer(normalize_app, name="normalize")
 app.add_typer(export_app, name="export")
 app.add_typer(sync_app, name="sync")
 app.add_typer(targets_app, name="targets")
+app.add_typer(profiles_app, name="profiles")
 
 SCORE_MEDIA_TYPE = "application/x-musescore"
 PNG_MEDIA_TYPE = "image/png"
@@ -235,7 +237,7 @@ def _create_target(config: TargetConfig, jobs: int) -> RemoteTarget:
 
 @targets_app.command("list")
 def list_targets(ctx: typer.Context):
-    """List configured remote targets without displaying their settings."""
+    """List configured remote targets with non-sensitive settings."""
     context = _context(ctx)
     targets = context.configs.targets()
     if not targets:
@@ -257,8 +259,278 @@ def _target_display_settings(context: AppContext, name: str, provider: str) -> s
     except Exception:
         details = ()
     if provider == "s3" and len(details) == 2:
-        return f"bucket={details[0]}, endpoint={details[1]}"
+        settings = {"bucket": details[0], "endpoint": details[1]}
+        return "\n".join(f"{key}={settings[key]}" for key in sorted(settings))
     return details[0] if details else "-"
+
+
+def _ask_target_text(message: str, description: str, *, password: bool = False) -> str:
+    prompt = questionary.password if password else questionary.text
+    answer = prompt(message, instruction=description).ask()
+    if answer is None:
+        raise typer.Abort()
+    return answer.strip()
+
+
+def _ask_optional_target_value(setting: str, description: str, *, password: bool = False) -> str | None:
+    if not questionary.confirm(f"Configure {setting}? {description}", default=False).ask():
+        return None
+    value = _ask_target_text(f"{setting}:", description, password=password)
+    return value or None
+
+
+def _target_values_prompt(provider: str) -> dict[str, str]:
+    if provider == "s3":
+        values = {
+            "TYPE": "s3",
+            "BUCKET": _ask_target_text("S3 bucket:", "The bucket where synchronized files will be stored."),
+        }
+        optional = {
+            "PREFIX": "Optional path prefix inside the bucket, useful for keeping files in a folder.",
+            "ENDPOINT_URL": "Optional S3-compatible service endpoint; leave unset for AWS S3.",
+            "ACCESS_KEY_ID": "Optional access key; leave unset to use the standard AWS credential chain.",
+            "SECRET_ACCESS_KEY": "Optional secret key paired with ACCESS_KEY_ID.",
+        }
+        for setting, description in optional.items():
+            value = _ask_optional_target_value(setting, description, password="SECRET" in setting)
+            if value is not None:
+                values[setting] = value
+        return values
+
+    values = {
+        "TYPE": "google-drive",
+        "FOLDER_ID": _ask_target_text(
+            "Google Drive folder ID:", "The ID of the Drive folder that will contain synchronized files."
+        ),
+        "CREDENTIALS_PATH": _ask_target_text(
+            "Google OAuth credentials path:",
+            "Path to the Google client credentials JSON downloaded from Google Cloud.",
+        ),
+    }
+    token = _ask_optional_target_value(
+        "TOKEN_PATH",
+        "Optional path for the cached OAuth token; otherwise a target-specific default is used.",
+    )
+    if token is not None:
+        values["TOKEN_PATH"] = token
+    return values
+
+
+def _target_state(name: str, values: dict[str, str]) -> str:
+    lines = [f"Target: {name}"]
+    for key, value in sorted(values.items()):
+        display = "********" if key in {"ACCESS_KEY_ID", "SECRET_ACCESS_KEY"} else value
+        lines.append(f"  {key}={display}")
+    return "\n".join(lines)
+
+
+@targets_app.command("add")
+def add_target(
+    ctx: typer.Context,
+    target_name: Annotated[str | None, typer.Argument(help="Name for the new remote target")] = None,
+):
+    """Interactively create a remote target."""
+    context = _context(ctx)
+    name = target_name or _ask_target_text(
+        "New target name:", "Letters, numbers, dots, hyphens, and underscores are allowed."
+    )
+    if not name or not TARGET_NAME.fullmatch(name):
+        raise typer.BadParameter("Target name must contain only letters, numbers, dots, hyphens, and underscores")
+    if name in context.configs.targets():
+        typer.echo(f"Remote target '{name}' already exists")
+        raise typer.Exit(code=1)
+    provider = questionary.select(
+        "Which storage provider should this target use?",
+        choices=["s3", "google-drive"],
+    ).ask()
+    if provider is None:
+        raise typer.Abort()
+    values = _target_values_prompt(provider)
+    typer.echo(_target_state(name, values))
+    if not typer.confirm("Write this target to the configuration file?", default=False):
+        typer.echo("No changes made.")
+        return
+    if context.dryrun:
+        typer.echo("Dry run: no changes made.")
+        return
+    context.configs.save_target(name, provider, values)
+    typer.echo(f"Target '{name}' added.")
+
+
+@profiles_app.command("list")
+def list_profiles(ctx: typer.Context):
+    """List configured profiles and their settings."""
+    context = _context(ctx)
+    profiles = context.configs.profiles()
+    if not profiles:
+        typer.echo("No profiles configured.")
+        return
+    table = Table()
+    table.add_column("PROFILE")
+    table.add_column("SETTINGS")
+    for name in profiles:
+        values = context.configs.profile_values(name)
+        settings = "\n".join(f"{key}={value}" for key, value in sorted(values.items())) or "-"
+        table.add_row(name, settings)
+    Console().print(table)
+
+
+@profiles_app.callback()
+def profiles(ctx: typer.Context):
+    """Show profile help and list profiles when no command is supplied."""
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        list_profiles(ctx)
+
+
+def _ask_profile_text(message: str, description: str, default: str | None = None) -> str:
+    answer = questionary.text(message, default=default or "", instruction=description).ask()
+    if answer is None:
+        raise typer.Abort()
+    return answer.strip()
+
+
+def _ask_optional_profile_value(setting: str, description: str, current: str | None = None) -> str | None:
+    if not questionary.confirm(f"Configure {setting}? {description}", default=current is not None).ask():
+        return None
+    value = _ask_profile_text(
+        f"{setting}:",
+        description,
+        current,
+    )
+    return value or None
+
+
+def _profile_values_prompt(existing: dict[str, str]) -> dict[str, str]:
+    values = {
+        "LOCAL_MSCZ_DIRECTORY": _ask_profile_text(
+            "Directory containing MuseScore .mscz files:",
+            "Used by normalize, export, and score sync commands.",
+            existing.get("LOCAL_MSCZ_DIRECTORY"),
+        ),
+        "LOCAL_PNG_DIRECTORY": _ask_profile_text(
+            "Directory containing exported PNG files:",
+            "Used by PNG sync commands and as the default export destination.",
+            existing.get("LOCAL_PNG_DIRECTORY"),
+        ),
+    }
+    if not values["LOCAL_MSCZ_DIRECTORY"] or not values["LOCAL_PNG_DIRECTORY"]:
+        raise typer.BadParameter("The local score and PNG directories are required")
+
+    optional = {
+        "MSCORE_CMD": "MuseScore executable used to export scores (default: mscore).",
+        "JOBS": "Maximum number of parallel export or sync jobs (default: 4).",
+        "DEFAULT_SCORES_TARGET": "Named remote target used by score sync when --target is omitted.",
+        "DEFAULT_PNGS_TARGET": "Named remote target used by PNG sync when --target is omitted.",
+    }
+    for setting, description in optional.items():
+        value = _ask_optional_profile_value(setting, description, existing.get(setting))
+        if value is not None:
+            values[setting] = value
+    return values
+
+
+def _profile_state(name: str, values: dict[str, str]) -> str:
+    lines = [f"Profile: {name}"]
+    defaults = {"MSCORE_CMD": "mscore", "JOBS": "4"}
+    for setting in PROFILE_FIELDS:
+        value = values.get(setting)
+        if value is None:
+            value = f"<not set; default: {defaults[setting]}>" if setting in defaults else "<not set>"
+        lines.append(f"  {setting}={value}")
+    return "\n".join(lines)
+
+
+def _profile_name(name: str | None, prompt: str) -> str:
+    selected = name or _ask_profile_text(prompt, "Letters, numbers, dots, hyphens, and underscores are allowed.")
+    if not selected:
+        raise typer.BadParameter("Profile name cannot be empty")
+    return selected
+
+
+@profiles_app.command("add")
+def add_profile(
+    ctx: typer.Context,
+    profile_name: Annotated[str | None, typer.Argument(help="Name for the new profile")] = None,
+):
+    """Interactively create a configuration profile."""
+    context = _context(ctx)
+    name = _profile_name(profile_name, "New profile name:")
+    if name in context.configs.profiles():
+        typer.echo(f"Profile '{name}' already exists")
+        raise typer.Exit(code=1)
+    values = _profile_values_prompt({})
+    typer.echo(_profile_state(name, values))
+    if not typer.confirm("Write this profile to the configuration file?", default=False):
+        typer.echo("No changes made.")
+        return
+    if context.dryrun:
+        typer.echo("Dry run: no changes made.")
+        return
+    context.configs.save_profile(name, values)
+    typer.echo(f"Profile '{name}' added.")
+
+
+@profiles_app.command("edit")
+def edit_profile(
+    ctx: typer.Context,
+    profile_name: Annotated[str | None, typer.Argument(help="Profile to edit")] = None,
+):
+    """Interactively edit a configuration profile."""
+    context = _context(ctx)
+    profiles = context.configs.profiles()
+    name = profile_name
+    if name is None:
+        if not profiles:
+            typer.echo("No profiles configured.")
+            raise typer.Exit(code=1)
+        choices = {profile: profile for profile in profiles}
+        choice = questionary.select("Which profile should be edited?", choices=list(choices)).ask()
+        if choice is None:
+            raise typer.Abort()
+        name = choices[choice]
+    if name not in profiles:
+        typer.echo(f"Profile '{name}' not found in configuration file")
+        raise typer.Exit(code=1)
+    values = _profile_values_prompt(context.configs.profile_values(name))
+    typer.echo(_profile_state(name, values))
+    if not typer.confirm("Write this profile to the configuration file?", default=False):
+        typer.echo("No changes made.")
+        return
+    if context.dryrun:
+        typer.echo("Dry run: no changes made.")
+        return
+    context.configs.save_profile(name, values)
+    typer.echo(f"Profile '{name}' updated.")
+
+
+@profiles_app.command("clear")
+def clear_profile(
+    ctx: typer.Context,
+    profile_name: Annotated[str | None, typer.Argument(help="Profile to remove")] = None,
+):
+    """Remove a configuration profile."""
+    context = _context(ctx)
+    profiles = context.configs.profiles()
+    if not profiles:
+        typer.echo("No profiles configured.")
+        raise typer.Exit(code=1)
+    name = profile_name
+    if name is None:
+        name = questionary.select("Which profile should be cleared?", choices=profiles).ask()
+        if name is None:
+            raise typer.Abort()
+    if name not in profiles:
+        typer.echo(f"Profile '{name}' not found in configuration file")
+        raise typer.Exit(code=1)
+    if not typer.confirm(f"Clear profile '{name}'?", default=False):
+        typer.echo("No changes made.")
+        return
+    if context.dryrun:
+        typer.echo("Dry run: no changes made.")
+        return
+    context.configs.clear_profile(name)
+    typer.echo(f"Profile '{name}' cleared.")
 
 
 @targets_app.callback()

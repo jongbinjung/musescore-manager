@@ -1,4 +1,4 @@
-"""Application and named remote-target configuration."""
+"""Application, profile, and named remote-target configuration."""
 
 from __future__ import annotations
 
@@ -19,6 +19,14 @@ DEFAULT_SCORES_TARGET = EnvironmentVariable("DEFAULT_SCORES_TARGET", str)
 DEFAULT_PNGS_TARGET = EnvironmentVariable("DEFAULT_PNGS_TARGET", str)
 
 TARGET_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+PROFILE_FIELDS = (
+    "LOCAL_MSCZ_DIRECTORY",
+    "LOCAL_PNG_DIRECTORY",
+    "MSCORE_CMD",
+    "JOBS",
+    "DEFAULT_SCORES_TARGET",
+    "DEFAULT_PNGS_TARGET",
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,13 @@ def _parser() -> configparser.ConfigParser:
     config = configparser.ConfigParser()
     config.read(get_configs_path())
     return config
+
+
+def _write_parser(config: configparser.ConfigParser) -> None:
+    path = get_configs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as config_file:
+        config.write(config_file)
 
 
 def _read_from_file(name: str, profile_name: str) -> str | None:
@@ -117,6 +132,68 @@ class Configs:
     def default_target(self, artifact_kind: str) -> str | None:
         variable = DEFAULT_SCORES_TARGET if artifact_kind == "scores" else DEFAULT_PNGS_TARGET
         return read_value(variable, profile_name=self.profile_name)
+
+    def profiles(self) -> list[str]:
+        """Return profile names, excluding named target sections."""
+        return [section for section in _parser().sections() if not section.startswith("target.")]
+
+    def profile_values(self, name: str) -> dict[str, str]:
+        """Return configured profile values without applying environment overrides."""
+        if not TARGET_NAME.fullmatch(name):
+            raise ValueError(f"Invalid profile name: {name}")
+        config = _parser()
+        if name not in config:
+            raise ValueError(f"Profile '{name}' not found in configuration file")
+        return {key.upper(): value for key, value in config[name].items() if key.upper() in PROFILE_FIELDS}
+
+    def save_profile(self, name: str, values: dict[str, str]) -> None:
+        """Create or replace one profile while preserving target sections."""
+        if not TARGET_NAME.fullmatch(name):
+            raise ValueError(f"Invalid profile name: {name}")
+        unknown = set(values) - set(PROFILE_FIELDS)
+        if unknown:
+            raise ValueError(f"Unsupported profile settings: {', '.join(sorted(unknown))}")
+        config = _parser()
+        if name not in config:
+            config.add_section(name)
+        else:
+            for key in list(config[name]):
+                config[name].pop(key)
+        for key, value in values.items():
+            config[name][key] = value
+        _write_parser(config)
+
+    def clear_profile(self, name: str) -> None:
+        if not TARGET_NAME.fullmatch(name):
+            raise ValueError(f"Invalid profile name: {name}")
+        config = _parser()
+        if name not in config or name.startswith("target."):
+            raise ValueError(f"Profile '{name}' not found in configuration file")
+        config.remove_section(name)
+        _write_parser(config)
+
+    def save_target(self, name: str, provider: str, values: dict[str, str]) -> None:
+        """Create or replace a named target while preserving other sections."""
+        if not TARGET_NAME.fullmatch(name):
+            raise ValueError(f"Invalid target name: {name}")
+        allowed = {
+            "s3": {"TYPE", "BUCKET", "PREFIX", "ENDPOINT_URL", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"},
+            "google-drive": {"TYPE", "FOLDER_ID", "CREDENTIALS_PATH", "TOKEN_PATH"},
+        }
+        if provider not in allowed:
+            raise ValueError(f"Unsupported target provider: {provider}")
+        if set(values) - allowed[provider]:
+            raise ValueError(f"Unsupported {provider} target settings")
+        config = _parser()
+        section_name = f"target.{name}"
+        if section_name not in config:
+            config.add_section(section_name)
+        else:
+            for key in list(config[section_name]):
+                config[section_name].pop(key)
+        for key, value in values.items():
+            config[section_name][key] = value
+        _write_parser(config)
 
     def targets(self) -> dict[str, str]:
         """Return configured target names and provider types without exposing settings."""

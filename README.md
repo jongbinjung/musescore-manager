@@ -42,9 +42,30 @@ CREDENTIALS_PATH=~/.config/msm/google-client.json
 The `[default]` section is a profile. Select another profile with `--profile NAME`. Normal application environment
 variables override profile values.
 
+Profiles can be managed interactively. With no subcommand, `profiles` prints its help and the current profile list:
+
+```bash
+uv run msm profiles
+uv run msm profiles add work
+uv run msm profiles edit work
+uv run msm profiles clear work
+```
+
+The add and edit wizards explain each setting, allow optional settings to be skipped, and show the complete proposed
+profile for confirmation before changing `~/.msm/configs`.
+
 Each `[target.NAME]` section defines a reusable destination. Select one with `--target NAME`, regardless of whether it
 uses Google Drive or S3. Target fields can be overridden with `MSM_TARGET_<NAME>_<FIELD>`, with punctuation in the name
 replaced by underscores. For example, `MSM_TARGET_ARCHIVE_BUCKET` overrides `BUCKET` for `archive`.
+
+Targets can also be created interactively:
+
+```bash
+uv run msm targets add archive
+```
+
+The wizard asks for the provider's required settings, offers optional settings individually, and confirms the complete
+target before changing `~/.msm/configs`.
 
 S3 targets support `BUCKET`, `PREFIX`, `ENDPOINT_URL`, `ACCESS_KEY_ID`, and `SECRET_ACCESS_KEY`. Standard
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_ENDPOINT_URL_S3` values are used as fallbacks, so the normal boto3

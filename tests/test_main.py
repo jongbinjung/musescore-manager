@@ -16,10 +16,38 @@ def test_cli_exposes_only_new_command_hierarchy():
     removed = runner.invoke(app, ["sync-pngs"])
 
     assert root.exit_code == 0
-    assert all(command in root.output for command in ("normalize", "export", "sync", "targets"))
+    assert all(command in root.output for command in ("normalize", "export", "sync", "targets", "profiles"))
     assert all(kind in sync.output for kind in ("scores", "pngs"))
-    assert all(command in targets.output for command in ("list", "clear"))
+    assert all(command in targets.output for command in ("list", "add", "clear"))
     assert removed.exit_code == 2
+
+
+def test_profiles_without_command_shows_help_then_lists_profiles(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / ".msm" / "configs"
+    config_path.parent.mkdir()
+    config_path.write_text("[default]\nLOCAL_MSCZ_DIRECTORY=/scores\n")
+
+    result = CliRunner().invoke(app, ["profiles"])
+
+    assert result.exit_code == 0
+    assert result.output.index("Usage:") < result.output.index("PROFILE")
+
+
+def test_profile_add_confirms_before_writing(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    values = {"LOCAL_MSCZ_DIRECTORY": "/scores", "LOCAL_PNG_DIRECTORY": "/pngs"}
+
+    with (
+        patch("msm.main._profile_values_prompt", return_value=values),
+        patch("msm.main.typer.confirm", return_value=False),
+    ):
+        result = CliRunner().invoke(app, ["profiles", "add", "work"])
+
+    assert result.exit_code == 0, result.output
+    assert "LOCAL_MSCZ_DIRECTORY=/scores" in result.output
+    assert "No changes made." in result.output
+    assert not (tmp_path / ".msm" / "configs").exists()
 
 
 def test_targets_list_does_not_expose_configuration_values(monkeypatch, tmp_path):
@@ -37,6 +65,24 @@ def test_targets_list_does_not_expose_configuration_values(monkeypatch, tmp_path
     assert "s3" in result.output
     assert "private-bucket" in result.output
     assert "private-secret" not in result.output
+
+
+def test_target_add_confirms_before_writing(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    values = {"TYPE": "s3", "BUCKET": "private-bucket"}
+
+    with (
+        patch("msm.main.questionary.select") as select,
+        patch("msm.main._target_values_prompt", return_value=values),
+        patch("msm.main.typer.confirm", return_value=False),
+    ):
+        select.return_value.ask.return_value = "s3"
+        result = CliRunner().invoke(app, ["targets", "add", "archive"])
+
+    assert result.exit_code == 0, result.output
+    assert "BUCKET=private-bucket" in result.output
+    assert "No changes made." in result.output
+    assert not (tmp_path / ".msm" / "configs").exists()
 
 
 def test_targets_without_command_shows_help_then_lists_targets(monkeypatch, tmp_path):
@@ -88,12 +134,12 @@ def test_targets_clear_selects_target_when_name_is_omitted(monkeypatch, tmp_path
     target = type("Target", (), {"clear": lambda self, dryrun=False, progress=None: None})()
 
     with patch("msm.main.questionary.select") as select, patch("msm.main._create_target", return_value=target):
-        select.return_value.ask.return_value = "archive (bucket=private-bucket, endpoint=-)"
+        select.return_value.ask.return_value = "archive (bucket=private-bucket\nendpoint=-)"
         result = CliRunner().invoke(app, ["targets", "clear"])
 
     assert result.exit_code == 0, result.output
     select.assert_called_once_with(
-        "Which target should be cleared?", choices=["archive (bucket=private-bucket, endpoint=-)"]
+        "Which target should be cleared?", choices=["archive (bucket=private-bucket\nendpoint=-)"]
     )
 
 

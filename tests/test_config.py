@@ -117,6 +117,24 @@ def test_lists_target_names_and_types_without_target_values(monkeypatch, tmp_pat
     assert Configs().targets() == {"archive": "s3", "gallery": "google-drive"}
 
 
+def test_profiles_can_be_listed_saved_and_cleared_without_touching_targets(monkeypatch, tmp_path):
+    write_config(tmp_path, "[default]\nMSCORE_CMD=mscore\n\n[target.archive]\nTYPE=s3\nBUCKET=bucket\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    configs = Configs()
+
+    assert configs.profiles() == ["default"]
+    assert configs.profile_values("default") == {"MSCORE_CMD": "mscore"}
+
+    configs.save_profile("work", {"LOCAL_MSCZ_DIRECTORY": "/scores", "JOBS": "2"})
+    assert configs.profiles() == ["default", "work"]
+    configs.clear_profile("work")
+    assert configs.profiles() == ["default"]
+    assert configs.targets() == {"archive": "s3"}
+
+    configs.save_target("gallery", "google-drive", {"TYPE": "google-drive", "FOLDER_ID": "folder"})
+    assert configs.targets() == {"archive": "s3", "gallery": "google-drive"}
+
+
 def test_target_display_values_include_only_safe_destination_details(monkeypatch, tmp_path):
     write_config(
         tmp_path,
