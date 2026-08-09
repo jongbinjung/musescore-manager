@@ -199,9 +199,7 @@ def _reject_collisions(named_paths) -> None:
 
 def _score_artifacts(paths: list[Path]) -> list[Artifact]:
     artifacts = [
-        Artifact(
-            path=path, name=Score(path, read_metadata=True).normalized_name(with_key=True), media_type=SCORE_MEDIA_TYPE
-        )
+        Artifact(path=path, name=Score(path, read_metadata=True).normalized_name(), media_type=SCORE_MEDIA_TYPE)
         for path in paths
     ]
     _reject_collisions((artifact.name, artifact.path) for artifact in artifacts)
@@ -253,14 +251,14 @@ def list_targets(ctx: typer.Context):
     Console().print(table)
 
 
-def _target_display_settings(context: AppContext, name: str, provider: str) -> str:
+def _target_display_settings(context: AppContext, name: str, provider: str, *, separator: str = "\n") -> str:
     try:
         details = context.configs.target_display_values(name)
     except Exception:
         details = ()
     if provider == "s3" and len(details) == 2:
         settings = {"bucket": details[0], "endpoint": details[1]}
-        return "\n".join(f"{key}={settings[key]}" for key in sorted(settings))
+        return separator.join(f"{key}={settings[key]}" for key in sorted(settings))
     return details[0] if details else "-"
 
 
@@ -273,8 +271,6 @@ def _ask_target_text(message: str, description: str, *, password: bool = False) 
 
 
 def _ask_optional_target_value(setting: str, description: str, *, password: bool = False) -> str | None:
-    if not questionary.confirm(f"Configure {setting}? {description}", default=False).ask():
-        return None
     value = _ask_target_text(f"{setting}:", description, password=password)
     return value or None
 
@@ -555,7 +551,8 @@ def clear_target(
     selected = target_name
     if selected is None:
         choices = {
-            f"{name} ({_target_display_settings(context, name, provider)})": name for name, provider in targets.items()
+            f"{name} ({_target_display_settings(context, name, provider, separator=', ')})": name
+            for name, provider in targets.items()
         }
         choice = questionary.select("Which target should be cleared?", choices=list(choices)).ask()
         if choice is None:

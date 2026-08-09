@@ -4,7 +4,7 @@ from unittest.mock import patch
 from test_score import write_score
 from typer.testing import CliRunner
 
-from msm.main import app
+from msm.main import _target_display_settings, _target_values_prompt, app
 
 
 def test_cli_exposes_only_new_command_hierarchy():
@@ -67,6 +67,17 @@ def test_targets_list_does_not_expose_configuration_values(monkeypatch, tmp_path
     assert "private-secret" not in result.output
 
 
+def test_target_display_settings_can_be_compact_for_selectors():
+    class Configs:
+        def target_display_values(self, name):
+            return ("private-bucket", "-")
+
+    context = type("Context", (), {"configs": Configs()})()
+
+    assert _target_display_settings(context, "archive", "s3") == "bucket=private-bucket\nendpoint=-"
+    assert _target_display_settings(context, "archive", "s3", separator=", ") == "bucket=private-bucket, endpoint=-"
+
+
 def test_target_add_confirms_before_writing(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     values = {"TYPE": "s3", "BUCKET": "private-bucket"}
@@ -83,6 +94,23 @@ def test_target_add_confirms_before_writing(monkeypatch, tmp_path):
     assert "BUCKET=private-bucket" in result.output
     assert "No changes made." in result.output
     assert not (tmp_path / ".msm" / "configs").exists()
+
+
+def test_s3_target_prompt_keeps_entered_optional_values():
+    with patch(
+        "msm.main._ask_target_text",
+        side_effect=["private-bucket", "scores", "https://s3.example", "access", "secret"],
+    ):
+        values = _target_values_prompt("s3")
+
+    assert values == {
+        "TYPE": "s3",
+        "BUCKET": "private-bucket",
+        "PREFIX": "scores",
+        "ENDPOINT_URL": "https://s3.example",
+        "ACCESS_KEY_ID": "access",
+        "SECRET_ACCESS_KEY": "secret",
+    }
 
 
 def test_targets_without_command_shows_help_then_lists_targets(monkeypatch, tmp_path):
@@ -134,12 +162,12 @@ def test_targets_clear_selects_target_when_name_is_omitted(monkeypatch, tmp_path
     target = type("Target", (), {"clear": lambda self, dryrun=False, progress=None: None})()
 
     with patch("msm.main.questionary.select") as select, patch("msm.main._create_target", return_value=target):
-        select.return_value.ask.return_value = "archive (bucket=private-bucket\nendpoint=-)"
+        select.return_value.ask.return_value = "archive (bucket=private-bucket, endpoint=-)"
         result = CliRunner().invoke(app, ["targets", "clear"])
 
     assert result.exit_code == 0, result.output
     select.assert_called_once_with(
-        "Which target should be cleared?", choices=["archive (bucket=private-bucket\nendpoint=-)"]
+        "Which target should be cleared?", choices=["archive (bucket=private-bucket, endpoint=-)"]
     )
 
 

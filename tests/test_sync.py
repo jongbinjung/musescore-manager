@@ -73,7 +73,7 @@ def test_sync_scores_uses_normalized_names_and_explicit_target(configs, tmp_path
     assert result.exit_code == 0
     artifact = target.calls[0][0]
     assert artifact.path == score
-    assert artifact.name == "Title-C.mscz"
+    assert artifact.name == "Title.mscz"
     assert artifact.media_type == SCORE_MEDIA_TYPE
     assert configs.target.call_args.args == ("drive",)
 
