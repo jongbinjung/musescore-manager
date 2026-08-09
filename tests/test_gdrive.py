@@ -8,13 +8,27 @@ from msm.remote import Artifact, SyncStatus
 
 
 class FakeRequest:
-    def __init__(self, response):
+    def __init__(self, response, exception=None):
         self.response = response
+        self.exception = exception
         self.execute_calls = []
 
     def execute(self, **kwargs):
         self.execute_calls.append(kwargs)
         return self.response
+
+
+class FakeBatch:
+    def __init__(self, callback):
+        self.callback = callback
+        self.requests = []
+
+    def add(self, request, request_id):
+        self.requests.append((request_id, request))
+
+    def execute(self):
+        for request_id, request in self.requests:
+            self.callback(request_id, request.response, request.exception)
 
 
 class FakeFiles:
@@ -26,6 +40,8 @@ class FakeFiles:
         self.create_calls = []
         self.create_requests = []
         self.update_calls = []
+        self.delete_calls = []
+        self.delete_exceptions = {}
 
     def list(self, **kwargs):
         self.list_calls.append(kwargs)
@@ -46,13 +62,23 @@ class FakeFiles:
         self.update_calls.append(kwargs)
         return FakeRequest({"id": kwargs["fileId"], "size": "3", "md5Checksum": "900150983cd24fb0d6963f7d28e17f72"})
 
+    def delete(self, **kwargs):
+        self.delete_calls.append(kwargs)
+        return FakeRequest({}, self.delete_exceptions.get(kwargs["fileId"]))
+
 
 class FakeService:
     def __init__(self, pages=None):
         self.fake_files = FakeFiles(pages)
+        self.batches = []
 
     def files(self):
         return self.fake_files
+
+    def new_batch_http_request(self, callback):
+        batch = FakeBatch(callback)
+        self.batches.append(batch)
+        return batch
 
 
 def managed_file(**values):
@@ -260,6 +286,27 @@ def test_validate_folder_rejects_non_folder():
 
     with pytest.raises(ValueError, match="not an accessible folder"):
         DriveSession(service, "folder-id").validate_folder()
+
+
+def test_clear_batches_deletes_and_reports_progress():
+    service = FakeService([{"files": [{"id": str(index)} for index in range(201)]}])
+    updates = []
+
+    DriveSession(service, "folder-id").clear(progress=lambda amount, total: updates.append((amount, total)))
+
+    assert [len(batch.requests) for batch in service.batches] == [100, 100, 1]
+    assert len(service.fake_files.delete_calls) == 201
+    assert updates == [(0, 201), (100, 201), (100, 201), (1, 201)]
+
+
+def test_clear_retries_failed_batch_deletes():
+    service = FakeService([{"files": [{"id": "one"}, {"id": "two"}]}])
+    service.fake_files.delete_exceptions["two"] = RuntimeError("temporary failure")
+
+    DriveSession(service, "folder-id").clear()
+
+    failed_request = service.batches[0].requests[1][1]
+    assert failed_request.execute_calls == [{"num_retries": 3}]
 
 
 def test_missing_google_dependencies_are_reported_only_when_connecting(monkeypatch, tmp_path):

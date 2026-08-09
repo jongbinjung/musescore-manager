@@ -9,12 +9,14 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from msm.exceptions import MissingDependencyError
 from msm.remote import Artifact, SyncResult, SyncStatus
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+DELETE_BATCH_SIZE = 100
 MANAGED_PROPERTY = {"musescoreManager": "png-sync"}
 FILE_FIELDS = "id,name,parents,mimeType,size,md5Checksum,modifiedTime,trashed,version,appProperties"
 DRIVE_FIELDS = f"nextPageToken,incompleteSearch,files({FILE_FIELDS})"
@@ -122,6 +124,35 @@ class DriveSession:
         )
         if folder.get("trashed") or folder.get("mimeType") != FOLDER_MIME_TYPE:
             raise ValueError(f"Google Drive destination {self.folder_id} is not an accessible folder")
+
+    def clear(self, dryrun: bool = False, progress: Callable[[int, int | None], None] | None = None) -> None:
+        remotes = self.list_files()
+        total = len(remotes)
+        if progress is not None:
+            progress(0, total)
+        if dryrun:
+            if progress is not None:
+                progress(total, total)
+            return
+        for offset in range(0, total, DELETE_BATCH_SIZE):
+            requests = []
+            failures = []
+
+            def collect_failure(request_id, response, exception):
+                if exception is not None:
+                    failures.append(requests[int(request_id)])
+
+            batch = self.service.new_batch_http_request(callback=collect_failure)
+            for remote in remotes[offset : offset + DELETE_BATCH_SIZE]:
+                request = self.service.files().delete(fileId=remote["id"], supportsAllDrives=True)
+                requests.append(request)
+                batch.add(request, request_id=str(len(requests) - 1))
+            batch.execute()
+            for request in failures:
+                request.execute(num_retries=3)
+            if progress is not None:
+                progress(len(requests), total)
+        self._files_by_name = {}
 
     def list_files(self, name: str | None = None) -> list[dict]:
         files: list[dict] = []

@@ -106,6 +106,29 @@ def test_reads_drive_named_target_with_scoped_default_token(monkeypatch, tmp_pat
     )
 
 
+def test_lists_target_names_and_types_without_target_values(monkeypatch, tmp_path):
+    write_config(
+        tmp_path,
+        "[default]\n\n[target.archive]\nTYPE=s3\nBUCKET=secret-bucket\nSECRET_ACCESS_KEY=secret\n"
+        "\n[target.gallery]\nTYPE=google-drive\nFOLDER_ID=secret-folder\n",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert Configs().targets() == {"archive": "s3", "gallery": "google-drive"}
+
+
+def test_target_display_values_include_only_safe_destination_details(monkeypatch, tmp_path):
+    write_config(
+        tmp_path,
+        "[default]\n\n[target.archive]\nTYPE=s3\nBUCKET=private-bucket\nENDPOINT_URL=https://s3.example\n"
+        "\n[target.gallery]\nTYPE=google-drive\nFOLDER_ID=folder-id\nCREDENTIALS_PATH=secret.json\n",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert Configs().target_display_values("archive") == ("private-bucket", "https://s3.example")
+    assert Configs().target_display_values("gallery") == ("https://drive.google.com/drive/folders/folder-id",)
+
+
 def test_target_validation(monkeypatch, tmp_path):
     write_config(tmp_path, "[default]\n\n[target.bad]\nTYPE=ftp\n")
     monkeypatch.setenv("HOME", str(tmp_path))

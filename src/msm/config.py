@@ -118,6 +118,22 @@ class Configs:
         variable = DEFAULT_SCORES_TARGET if artifact_kind == "scores" else DEFAULT_PNGS_TARGET
         return read_value(variable, profile_name=self.profile_name)
 
+    def targets(self) -> dict[str, str]:
+        """Return configured target names and provider types without exposing settings."""
+        config = _parser()
+        return {
+            section.removeprefix("target."): config[section].get("TYPE", "").lower()
+            for section in config.sections()
+            if section.startswith("target.")
+        }
+
+    def target_display_values(self, name: str) -> tuple[str, ...]:
+        """Return non-sensitive target values suitable for display."""
+        target = self.target(name)
+        if isinstance(target, S3TargetConfig):
+            return (target.bucket, target.endpoint_url or "-")
+        return (f"https://drive.google.com/drive/folders/{target.folder_id}",)
+
     def target(self, name: str) -> TargetConfig:
         if not TARGET_NAME.fullmatch(name):
             raise ValueError(f"Invalid target name: {name}")

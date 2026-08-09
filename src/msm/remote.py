@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 
 @dataclass(frozen=True)
@@ -33,3 +33,5 @@ class RemoteTarget(Protocol):
     concurrent: bool
 
     def sync(self, artifact: Artifact, dryrun: bool = False, force: bool = False) -> SyncResult: ...
+
+    def clear(self, dryrun: bool = False, progress: Callable[[int, int | None], None] | None = None) -> None: ...

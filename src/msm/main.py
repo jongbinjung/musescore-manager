@@ -6,7 +6,9 @@ from typing import Annotated
 
 import questionary
 import typer
+from rich.console import Console
 from rich.progress import Progress
+from rich.table import Table
 
 from msm.config import Configs, DriveTargetConfig, S3TargetConfig, TargetConfig
 from msm.export import png_export_status, to_pngs
@@ -20,9 +22,11 @@ app = typer.Typer(no_args_is_help=True)
 normalize_app = typer.Typer(no_args_is_help=True, help="Normalize local files.")
 export_app = typer.Typer(no_args_is_help=True, help="Export local files to another format.")
 sync_app = typer.Typer(no_args_is_help=True, help="Synchronize local files to a remote target.")
+targets_app = typer.Typer(invoke_without_command=True, help="Manage configured remote targets.")
 app.add_typer(normalize_app, name="normalize")
 app.add_typer(export_app, name="export")
 app.add_typer(sync_app, name="sync")
+app.add_typer(targets_app, name="targets")
 
 SCORE_MEDIA_TYPE = "application/x-musescore"
 PNG_MEDIA_TYPE = "image/png"
@@ -227,6 +231,89 @@ def _create_target(config: TargetConfig, jobs: int) -> RemoteTarget:
         session.validate_folder()
         return session
     raise TypeError(f"Unsupported target configuration: {config}")
+
+
+@targets_app.command("list")
+def list_targets(ctx: typer.Context):
+    """List configured remote targets without displaying their settings."""
+    context = _context(ctx)
+    targets = context.configs.targets()
+    if not targets:
+        typer.echo("No remote targets configured.")
+        return
+    table = Table()
+    table.add_column("TARGET")
+    table.add_column("TYPE")
+    table.add_column("SETTINGS")
+    for name, provider in targets.items():
+        settings = _target_display_settings(context, name, provider)
+        table.add_row(name, provider or "unknown", settings)
+    Console().print(table)
+
+
+def _target_display_settings(context: AppContext, name: str, provider: str) -> str:
+    try:
+        details = context.configs.target_display_values(name)
+    except Exception:
+        details = ()
+    if provider == "s3" and len(details) == 2:
+        return f"bucket={details[0]}, endpoint={details[1]}"
+    return details[0] if details else "-"
+
+
+@targets_app.callback()
+def targets(ctx: typer.Context):
+    """Show target help and list targets when no command is supplied."""
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        list_targets(ctx)
+
+
+@targets_app.command("clear")
+def clear_target(
+    ctx: typer.Context,
+    target_name: Annotated[str | None, typer.Argument(help="Configured remote target name")] = None,
+):
+    """Clear all data from a configured remote target."""
+    context = _context(ctx)
+    targets = context.configs.targets()
+    if not targets:
+        typer.echo("No remote targets configured.")
+        raise typer.Exit(code=1)
+    selected = target_name
+    if selected is None:
+        choices = {
+            f"{name} ({_target_display_settings(context, name, provider)})": name for name, provider in targets.items()
+        }
+        choice = questionary.select("Which target should be cleared?", choices=list(choices)).ask()
+        if choice is None:
+            raise typer.Abort()
+        selected = choices[choice]
+    if selected not in targets:
+        typer.echo(f"Remote target '{selected}' not found in configuration file")
+        raise typer.Exit(code=1)
+    try:
+        target = _create_target(context.configs.target(selected), context.configs.jobs())
+        with Progress() as progress:
+            task = progress.add_task(f"Clearing {selected}...", total=None)
+            completed = 0
+
+            def advance(amount: int, total: int | None) -> None:
+                nonlocal completed
+                completed += amount
+                progress.update(task, advance=amount, total=total)
+                if amount == 0 and total is not None:
+                    progress.console.print(f"Found {total} items in {selected}.")
+                elif amount:
+                    action = "Would delete" if context.dryrun else "Deleted"
+                    suffix = f"/{total}" if total is not None else ""
+                    progress.console.print(f"{action} {completed}{suffix} items from {selected}.")
+
+            target.clear(dryrun=context.dryrun, progress=advance)
+    except Exception as error:
+        typer.echo(f"Failed to clear target '{selected}': {error}")
+        raise typer.Exit(code=1)
+    typer.echo(f"{'Would clear' if context.dryrun else 'Cleared'} target '{selected}'.")
 
 
 def _resolve_target(context: AppContext, kind: str, target_name: str | None, jobs: int) -> tuple[str, RemoteTarget]:

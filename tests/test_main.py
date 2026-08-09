@@ -1,4 +1,5 @@
 import threading
+from unittest.mock import patch
 
 from test_score import write_score
 from typer.testing import CliRunner
@@ -11,12 +12,89 @@ def test_cli_exposes_only_new_command_hierarchy():
 
     root = runner.invoke(app, ["--help"])
     sync = runner.invoke(app, ["sync", "--help"])
+    targets = runner.invoke(app, ["targets", "--help"])
     removed = runner.invoke(app, ["sync-pngs"])
 
     assert root.exit_code == 0
-    assert all(command in root.output for command in ("normalize", "export", "sync"))
+    assert all(command in root.output for command in ("normalize", "export", "sync", "targets"))
     assert all(kind in sync.output for kind in ("scores", "pngs"))
+    assert all(command in targets.output for command in ("list", "clear"))
     assert removed.exit_code == 2
+
+
+def test_targets_list_does_not_expose_configuration_values(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / ".msm" / "configs"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        "[default]\n\n[target.archive]\nTYPE=s3\nBUCKET=private-bucket\nSECRET_ACCESS_KEY=private-secret\n"
+    )
+
+    result = CliRunner().invoke(app, ["targets", "list"])
+
+    assert result.exit_code == 0
+    assert "archive" in result.output
+    assert "s3" in result.output
+    assert "private-bucket" in result.output
+    assert "private-secret" not in result.output
+
+
+def test_targets_without_command_shows_help_then_lists_targets(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / ".msm" / "configs"
+    config_path.parent.mkdir()
+    config_path.write_text("[default]\n\n[target.archive]\nTYPE=s3\nBUCKET=private-bucket\n")
+
+    result = CliRunner().invoke(app, ["targets"])
+
+    assert result.exit_code == 0
+    assert result.output.index("Usage:") < result.output.index("TARGET")
+
+
+def test_targets_clear_uses_named_target(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / ".msm" / "configs"
+    config_path.parent.mkdir()
+    config_path.write_text("[default]\n\n[target.archive]\nTYPE=s3\nBUCKET=private-bucket\n")
+
+    class FakeTarget:
+        dryrun = None
+
+        def clear(self, dryrun=False, progress=None):
+            self.dryrun = dryrun
+            if progress is not None:
+                progress(0, 150)
+                progress(100, 150)
+                progress(50, 150)
+
+    target = FakeTarget()
+
+    with patch("msm.main._create_target", return_value=target) as create:
+        result = CliRunner().invoke(app, ["targets", "clear", "archive"])
+
+    assert result.exit_code == 0, result.output
+    assert target.dryrun is False
+    assert create.call_args.args[0].name == "archive"
+    assert "Found 150 items in archive." in result.output
+    assert "Deleted 100/150 items from archive." in result.output
+    assert "Deleted 150/150 items from archive." in result.output
+
+
+def test_targets_clear_selects_target_when_name_is_omitted(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / ".msm" / "configs"
+    config_path.parent.mkdir()
+    config_path.write_text("[default]\n\n[target.archive]\nTYPE=s3\nBUCKET=private-bucket\n")
+    target = type("Target", (), {"clear": lambda self, dryrun=False, progress=None: None})()
+
+    with patch("msm.main.questionary.select") as select, patch("msm.main._create_target", return_value=target):
+        select.return_value.ask.return_value = "archive (bucket=private-bucket, endpoint=-)"
+        result = CliRunner().invoke(app, ["targets", "clear"])
+
+    assert result.exit_code == 0, result.output
+    select.assert_called_once_with(
+        "Which target should be cleared?", choices=["archive (bucket=private-bucket, endpoint=-)"]
+    )
 
 
 def test_export_dryrun_does_not_require_output_directory(monkeypatch, tmp_path):

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from msm.exceptions import MissingDependencyError
 from msm.remote import Artifact, SyncResult, SyncStatus
@@ -193,6 +193,29 @@ class S3Store:
             request["ContentType"] = media_type
         self.client.put_object(**request)
 
+    def clear(
+        self, prefix: str = "", dryrun: bool = False, progress: Callable[[int, int | None], None] | None = None
+    ) -> None:
+        continuation_token = None
+        while True:
+            request = {"Bucket": self.bucket, "Prefix": prefix}
+            if continuation_token:
+                request["ContinuationToken"] = continuation_token
+            response = self.client.list_objects_v2(**request)
+            keys = [item["Key"] for item in response.get("Contents", [])]
+            if keys and not dryrun:
+                self.client.delete_objects(
+                    Bucket=self.bucket,
+                    Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True},
+                )
+            if progress is not None:
+                progress(len(keys), None)
+            if not response.get("IsTruncated"):
+                return
+            continuation_token = response.get("NextContinuationToken")
+            if not continuation_token:
+                raise RuntimeError("S3 did not return a continuation token")
+
 
 def sync_file(
     store: ObjectStore,
@@ -249,3 +272,6 @@ class S3Target:
             media_type=artifact.media_type,
             force=force,
         )
+
+    def clear(self, dryrun: bool = False, progress: Callable[[int, int | None], None] | None = None) -> None:
+        self.store.clear(self.prefix, dryrun=dryrun, progress=progress)
