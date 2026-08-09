@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-"""Smoke test that the package can be imported and a simple function can be called."""
+"""Smoke test the import and installed CLI command tree."""
+
+import subprocess
 
 from msm.config import Configs
 
 Configs()
+subprocess.run(["msm", "--help"], check=True)
+subprocess.run(["msm", "sync", "--help"], check=True)

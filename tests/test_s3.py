@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 from msm.exceptions import MissingDependencyError
-from msm.s3 import RemoteState, S3Store, SourceVersion, SyncStatus, sync_file
+from msm.remote import Artifact, SyncStatus
+from msm.s3 import RemoteState, S3Store, S3Target, SourceVersion, sync_file
 
 
 class NotFoundError(Exception):
@@ -204,3 +205,16 @@ def test_sync_uses_content_digest_for_unchanged_file(tmp_path):
     result = sync_file(S3Store(client, "scores"), path, "Score-C.mscz")
 
     assert result.status is SyncStatus.UNCHANGED
+
+
+def test_s3_target_applies_prefix_and_content_type(tmp_path):
+    path = tmp_path / "score.png"
+    path.write_bytes(b"png")
+    client = FakeClient()
+    target = S3Target(S3Store(client, "artifacts"), "published/pngs")
+
+    result = target.sync(Artifact(path, "score.png", "image/png"))
+
+    assert result.name == "published/pngs/score.png"
+    assert client.uploads[0]["Key"] == "published/pngs/score.png"
+    assert client.uploads[0]["ContentType"] == "image/png"

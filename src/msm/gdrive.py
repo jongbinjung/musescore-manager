@@ -1,4 +1,4 @@
-"""Google Drive integration for synchronizing exported PNG files."""
+"""Google Drive integration for synchronizing files."""
 
 from __future__ import annotations
 
@@ -8,35 +8,16 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
-from msm.config import get_google_token_path
 from msm.exceptions import MissingDependencyError
+from msm.remote import Artifact, SyncResult, SyncStatus
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
-PNG_MIME_TYPE = "image/png"
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 MANAGED_PROPERTY = {"musescoreManager": "png-sync"}
 FILE_FIELDS = "id,name,parents,mimeType,size,md5Checksum,modifiedTime,trashed,version,appProperties"
 DRIVE_FIELDS = f"nextPageToken,incompleteSearch,files({FILE_FIELDS})"
-
-
-class SyncStatus(str, Enum):
-    CREATED = "created"
-    UPDATED = "updated"
-    SKIPPED = "skipped"
-    WOULD_CREATE = "would_create"
-    WOULD_UPDATE = "would_update"
-    CONFLICT = "conflict"
-
-
-@dataclass(frozen=True)
-class SyncResult:
-    path: Path
-    status: SyncStatus
-    remote_id: str | None = None
-    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +37,7 @@ def _google_dependencies():
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseUpload
     except ModuleNotFoundError as error:
-        raise MissingDependencyError("Google Drive sync requires the 'gcs' package extra") from error
+        raise MissingDependencyError("Google Drive sync requires the 'drive' package extra") from error
 
     return Request, Credentials, RefreshError, InstalledAppFlow, build, MediaIoBaseUpload
 
@@ -74,9 +55,8 @@ def _write_token(path: Path, contents: str) -> None:
             temporary_path.unlink()
 
 
-def authenticate(creds_path: Path, token_path: Path | None = None):
+def authenticate(creds_path: Path, token_path: Path):
     Request, Credentials, RefreshError, InstalledAppFlow, _, _ = _google_dependencies()
-    token_path = token_path or get_google_token_path()
     token_path.parent.mkdir(parents=True, exist_ok=True)
 
     creds = None
@@ -121,13 +101,15 @@ def _escape_drive_query_string(value: str) -> str:
 class DriveSession:
     """One authenticated Drive client and one sync run's remote index."""
 
+    concurrent = False
+
     def __init__(self, service, folder_id: str):
         self.service = service
         self.folder_id = folder_id
         self._files_by_name: dict[str, list[dict]] | None = None
 
     @classmethod
-    def from_credentials(cls, creds_path: Path, folder_id: str, token_path: Path | None = None) -> "DriveSession":
+    def from_credentials(cls, creds_path: Path, folder_id: str, token_path: Path) -> "DriveSession":
         _, _, _, _, build, _ = _google_dependencies()
         creds = authenticate(creds_path, token_path)
         return cls(build("drive", "v3", credentials=creds), folder_id)
@@ -185,78 +167,89 @@ class DriveSession:
     def _name_matches(name: str, files: list[dict]) -> list[dict]:
         return [remote for remote in files if remote.get("name") == name]
 
-    def sync_file(self, path: Path, dryrun: bool = False) -> SyncResult:
+    def sync(self, artifact: Artifact, dryrun: bool = False, force: bool = False) -> SyncResult:
+        return self._sync_file(artifact.path, artifact.name, artifact.media_type, dryrun, force)
+
+    def sync_file(
+        self,
+        path: Path,
+        dryrun: bool = False,
+        remote_name: str | None = None,
+        media_type: str = "image/png",
+    ) -> SyncResult:
+        return self._sync_file(path, remote_name or path.name, media_type, dryrun)
+
+    def _sync_file(
+        self, path: Path, remote_name: str, media_type: str, dryrun: bool, force: bool = False
+    ) -> SyncResult:
         local = fingerprint(path)
-        matches = self._name_matches(path.name, self._remote_index().get(path.name, []))
+        matches = self._name_matches(remote_name, self._remote_index().get(remote_name, []))
         unmanaged = [remote for remote in matches if not self._is_managed(remote)]
         managed = [remote for remote in matches if self._is_managed(remote)]
 
-        if unmanaged:
-            return SyncResult(path, SyncStatus.CONFLICT, error="same-name Drive file is not managed by this app")
-        if any(remote.get("mimeType") != PNG_MIME_TYPE for remote in managed):
-            return SyncResult(path, SyncStatus.CONFLICT, error="same-name app-managed Drive file is not a PNG")
+        if unmanaged and not force:
+            return SyncResult(remote_name, SyncStatus.CONFLICT, error="same-name Drive file is not managed by this app")
+        if any(remote.get("mimeType") != media_type for remote in managed) and not force:
+            return SyncResult(
+                remote_name, SyncStatus.CONFLICT, error="same-name app-managed Drive file has another type"
+            )
+        if len(matches) > 1 and len(managed) <= 1:
+            return SyncResult(remote_name, SyncStatus.CONFLICT, error="multiple same-name Drive files exist")
         if len(managed) > 1:
-            return SyncResult(path, SyncStatus.CONFLICT, error="multiple app-managed Drive files have this name")
+            return SyncResult(remote_name, SyncStatus.CONFLICT, error="multiple app-managed Drive files have this name")
 
-        remote = managed[0] if managed else None
+        remote = matches[0] if force and len(matches) == 1 else (managed[0] if managed else None)
 
         if remote is not None and remote.get("md5Checksum") == local.md5 and str(remote.get("size")) == str(local.size):
-            return SyncResult(path, SyncStatus.SKIPPED, remote_id=remote["id"])
+            return SyncResult(remote_name, SyncStatus.UNCHANGED, remote_id=remote["id"])
 
         if dryrun:
-            status = SyncStatus.WOULD_UPDATE if remote is not None else SyncStatus.WOULD_CREATE
-            return SyncResult(path, status, remote_id=remote.get("id") if remote else None)
+            status = SyncStatus.UPDATED if remote is not None else SyncStatus.CREATED
+            return SyncResult(remote_name, status, remote_id=remote.get("id") if remote else None)
 
         if remote is None:
-            if self.list_files(path.name):
-                return SyncResult(path, SyncStatus.CONFLICT, error="same-name Drive file appeared during sync")
+            if self.list_files(remote_name):
+                return SyncResult(remote_name, SyncStatus.CONFLICT, error="same-name Drive file appeared during sync")
             _, _, _, _, _, MediaIoBaseUpload = _google_dependencies()
             request = self.service.files().create(
                 body={
-                    "name": path.name,
+                    "name": remote_name,
                     "parents": [self.folder_id],
-                    "mimeType": PNG_MIME_TYPE,
+                    "mimeType": media_type,
                     "appProperties": MANAGED_PROPERTY,
                 },
-                media_body=MediaIoBaseUpload(io.BytesIO(local.content), mimetype=PNG_MIME_TYPE, resumable=True),
+                media_body=MediaIoBaseUpload(io.BytesIO(local.content), mimetype=media_type, resumable=True),
                 fields=FILE_FIELDS,
                 supportsAllDrives=True,
             )
             response = request.execute(num_retries=0)
-            response.update(name=path.name, mimeType=PNG_MIME_TYPE, appProperties=MANAGED_PROPERTY)
-            self._remote_index().setdefault(path.name, []).append(response)
-            return SyncResult(path, SyncStatus.CREATED, remote_id=response.get("id"))
+            response.update(name=remote_name, mimeType=media_type, appProperties=MANAGED_PROPERTY)
+            self._remote_index().setdefault(remote_name, []).append(response)
+            return SyncResult(remote_name, SyncStatus.CREATED, remote_id=response.get("id"))
 
-        refreshed_matches = self.list_files(path.name)
-        if len(refreshed_matches) != 1 or refreshed_matches[0].get("id") != remote["id"]:
-            return SyncResult(
-                path, SyncStatus.CONFLICT, remote_id=remote["id"], error="Drive folder changed during sync"
-            )
+        if force:
+            current = remote
+        else:
+            refreshed_matches = self.list_files(remote_name)
+            if len(refreshed_matches) != 1 or refreshed_matches[0].get("id") != remote["id"]:
+                return SyncResult(
+                    remote_name, SyncStatus.CONFLICT, remote_id=remote["id"], error="Drive folder changed during sync"
+                )
 
-        current = refreshed_matches[0]
-        if not self._is_managed(current) or not self._same_revision(remote, current):
-            return SyncResult(path, SyncStatus.CONFLICT, remote_id=remote["id"], error="Drive file changed during sync")
+            current = refreshed_matches[0]
+            if not self._is_managed(current) or not self._same_revision(remote, current):
+                return SyncResult(
+                    remote_name, SyncStatus.CONFLICT, remote_id=remote["id"], error="Drive file changed during sync"
+                )
 
         _, _, _, _, _, MediaIoBaseUpload = _google_dependencies()
         request = self.service.files().update(
             fileId=remote["id"],
-            body={"name": path.name, "mimeType": PNG_MIME_TYPE, "appProperties": MANAGED_PROPERTY},
-            media_body=MediaIoBaseUpload(io.BytesIO(local.content), mimetype=PNG_MIME_TYPE, resumable=True),
+            body={"name": remote_name, "mimeType": media_type, "appProperties": MANAGED_PROPERTY},
+            media_body=MediaIoBaseUpload(io.BytesIO(local.content), mimetype=media_type, resumable=True),
             fields=FILE_FIELDS,
             supportsAllDrives=True,
         )
         response = request.execute(num_retries=0)
         remote.update(response)
-        return SyncResult(path, SyncStatus.UPDATED, remote_id=remote["id"])
-
-
-def upload_file(
-    file_path: Path,
-    folder_id: str,
-    creds_path: Path,
-    dryrun: bool = False,
-    token_path: Path | None = None,
-) -> SyncResult:
-    """Synchronize one file; retained as a compatibility entry point."""
-    session = DriveSession.from_credentials(creds_path, folder_id, token_path)
-    return session.sync_file(file_path, dryrun=dryrun)
+        return SyncResult(remote_name, SyncStatus.UPDATED, remote_id=remote["id"])

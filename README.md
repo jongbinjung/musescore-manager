@@ -1,63 +1,83 @@
 # Musescore file management
 
-## Getting started
+A CLI interface for managing Musescore files and their PNG exports. It can normalize Musescore files, export PNGs, and synchronize them to
+Google Drive or S3-compatible services.
 
-### First time
+## Installation
 
-1. Install the project and development dependencies:
-
-    ```bash
-    uv sync --extra gcs --extra s3 --group dev
-    make init
-    ```
-
-1. Create configuration/credentials file at `~/.msm/configs`, with values:
-
-    ```ini
-    [default]
-    LOCAL_MSCZ_DIRECTORY=<Local path to where .mscz files are stored>
-    LOCAL_PNG_DIRECTORY=<Local path to where PNG files are exported>
-    MSCORE_CMD=<MuseScore command; defaults to mscore>
-    JOBS=<Default maximum number of concurrent exports and uploads; defaults to 4>
-
-    GOOGLE_DRIVE_FOLDER_ID=<Google Drive destination folder ID>
-    GOOGLE_APP_CREDENTIALS_JSON_PATH=<Path to Google OAuth client credentials JSON>
-
-    AWS_ACCESS_KEY_ID=<AWS access key ID for S3 storage>
-    AWS_SECRET_ACCESS_KEY=<AWS secret access key for S3 storage>
-    AWS_ENDPOINT_URL_S3=https://...
-    MSCZ_BUCKET_NAME=<S3 bucket name>
-    ```
-Environment variables override values from the selected profile. Use `--profile` to select a profile other than
-`default`.
-
-Google Drive support requires the optional dependencies installed with `uv sync --extra gcs`. The command requests
-access to Google Drive so it can use a destination folder configured by ID. The first `sync-pngs` run opens a browser
-for OAuth authorization and stores the refresh token at `~/.msm/google-drive-token.json`.
-
-## Usage
+Install the project and the providers you use:
 
 ```bash
-uv run msm --help
-uv run msm --path ./scores normalize
-uv run msm --path ./scores export-pngs --export-dir ./pngs
-uv run msm --path ./scores upload
-uv run msm sync-pngs
+uv sync --extra drive --extra s3 --group dev
+make init
 ```
 
-Preview synchronization with:
+Google Drive uses the `drive` extra. S3 and S3-compatible services use the `s3` extra.
+
+## Configuration
+
+Create `~/.msm/configs`:
+
+```ini
+[default]
+LOCAL_MSCZ_DIRECTORY=/path/to/scores
+LOCAL_PNG_DIRECTORY=/path/to/pngs
+MSCORE_CMD=mscore
+JOBS=4
+DEFAULT_SCORES_TARGET=archive
+DEFAULT_PNGS_TARGET=gallery
+
+[target.archive]
+TYPE=s3
+BUCKET=my-score-bucket
+PREFIX=scores
+ENDPOINT_URL=https://s3.example.com
+
+[target.gallery]
+TYPE=google-drive
+FOLDER_ID=<Google Drive folder ID>
+CREDENTIALS_PATH=~/.config/msm/google-client.json
+```
+
+The `[default]` section is a profile. Select another profile with `--profile NAME`. Normal application environment
+variables override profile values.
+
+Each `[target.NAME]` section defines a reusable destination. Select one with `--target NAME`, regardless of whether it
+uses Google Drive or S3. Target fields can be overridden with `MSM_TARGET_<NAME>_<FIELD>`, with punctuation in the name
+replaced by underscores. For example, `MSM_TARGET_ARCHIVE_BUCKET` overrides `BUCKET` for `archive`.
+
+S3 targets support `BUCKET`, `PREFIX`, `ENDPOINT_URL`, `ACCESS_KEY_ID`, and `SECRET_ACCESS_KEY`. Standard
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_ENDPOINT_URL_S3` values are used as fallbacks, so the normal boto3
+credential chain remains available.
+
+Google Drive targets support `FOLDER_ID`, `CREDENTIALS_PATH`, and an optional `TOKEN_PATH`. By default, OAuth tokens are
+stored per target at `~/.msm/tokens/google-drive-<target>.json`. The first use can open a browser for authorization.
+
+## Commands
+
+Local operations use `normalize` and `export`:
 
 ```bash
-uv run msm --dryrun sync-pngs
+uv run msm normalize scores
+uv run msm normalize scores --path ./scores
+uv run msm export scores --path ./scores --output ./pngs --jobs 2
 ```
 
-`export-pngs` and `upload` run up to `JOBS` tasks concurrently by default. Override the configured value for a single
-command with `--jobs`, for example `uv run msm --path ./scores upload --jobs 2`.
+Remote operations use `sync`:
 
-The command compares PNG checksums with app-managed files in the configured folder. Unchanged files are skipped,
-changed files are updated, and missing files are created. A same-name file not managed by this application, or
-multiple managed files with the same name, is reported as a conflict and left unchanged. Drive synchronization is
-one-way and does not remove remote files that are absent locally.
+```bash
+uv run msm sync scores
+uv run msm sync scores --target gallery
+uv run msm sync pngs --target archive
+uv run msm --dryrun sync pngs --target gallery
+```
 
-Pass `--dryrun` before a command to preview filesystem, S3, or Drive mutations. Remote data is not changed, but a
-Drive preview can still open the OAuth flow and write or refresh the local token.
+Score commands default to `LOCAL_MSCZ_DIRECTORY`; PNG commands default to `LOCAL_PNG_DIRECTORY`. A path can be one file
+or a directory. Directory scans are non-recursive.
+
+`sync` is one-way and non-deleting. It creates missing remote files, updates older managed files, skips unchanged files,
+and leaves remote-newer or conflicting files untouched. Conflicts and remote-newer results produce a nonzero exit code.
+`--dryrun` prevents remote mutations but still reads remote state and can authorize Google Drive or refresh its token.
+
+The former flat invocations `msm normalize`, `msm export-pngs`, `msm sync-pngs`, `msm upload`, and
+`msm upload-scores` have been removed.

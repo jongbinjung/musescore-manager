@@ -1,12 +1,12 @@
-"""S3 storage adapter and score synchronization workflow."""
+"""S3 storage adapter and synchronization workflow."""
 
 from dataclasses import dataclass
-from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
 
 from msm.exceptions import MissingDependencyError
+from msm.remote import Artifact, SyncResult, SyncStatus
 
 
 @dataclass(frozen=True)
@@ -113,21 +113,9 @@ class RemoteState:
 class ObjectStore(Protocol):
     def state(self, key: str) -> RemoteState: ...
 
-    def upload(self, content: bytes, key: str, version: SourceVersion, remote: RemoteState) -> None: ...
-
-
-class SyncStatus(Enum):
-    CREATED = "created"
-    UPDATED = "updated"
-    UNCHANGED = "unchanged"
-    REMOTE_NEWER = "remote-newer"
-    CONFLICT = "conflict"
-
-
-@dataclass(frozen=True)
-class SyncResult:
-    key: str
-    status: SyncStatus
+    def upload(
+        self, content: bytes, key: str, version: SourceVersion, remote: RemoteState, media_type: str | None = None
+    ) -> None: ...
 
 
 class S3Store:
@@ -188,20 +176,32 @@ class S3Store:
             size=size,
         )
 
-    def upload(self, content: bytes, key: str, version: SourceVersion, remote: RemoteState) -> None:
+    def upload(
+        self, content: bytes, key: str, version: SourceVersion, remote: RemoteState, media_type: str | None = None
+    ) -> None:
         if remote.exists and remote.etag is None:
             raise RuntimeError(f"S3 did not return an ETag for existing object: {key}")
         conditions = {"IfMatch": remote.etag} if remote.exists else {"IfNoneMatch": "*"}
-        self.client.put_object(
+        request = dict(
             Bucket=self.bucket,
             Key=key,
             Body=content,
             Metadata=version.metadata(),
             **conditions,
         )
+        if media_type is not None:
+            request["ContentType"] = media_type
+        self.client.put_object(**request)
 
 
-def sync_file(store: ObjectStore, path: Path, key: str, dryrun: bool = False) -> SyncResult:
+def sync_file(
+    store: ObjectStore,
+    path: Path,
+    key: str,
+    dryrun: bool = False,
+    media_type: str | None = None,
+    force: bool = False,
+) -> SyncResult:
     snapshot = SourceSnapshot.lazy_from_path(path)
     local_version = None
     remote = store.state(key)
@@ -210,23 +210,42 @@ def sync_file(store: ObjectStore, path: Path, key: str, dryrun: bool = False) ->
         # A remote digest takes precedence over timestamps, so it must be compared.
         local_version = snapshot.version
         if remote.version.digest == local_version.digest:
-            return SyncResult(key=key, status=SyncStatus.UNCHANGED)
+            return SyncResult(name=key, status=SyncStatus.UNCHANGED)
 
-    if remote.version is not None and remote.version.modified_ns > snapshot.modified_ns:
-        return SyncResult(key=key, status=SyncStatus.REMOTE_NEWER)
+    if not force and remote.version is not None and remote.version.modified_ns > snapshot.modified_ns:
+        return SyncResult(name=key, status=SyncStatus.REMOTE_NEWER)
 
-    if remote.version is not None and remote.version.modified_ns == snapshot.modified_ns:
-        return SyncResult(key=key, status=SyncStatus.CONFLICT)
+    if not force and remote.version is not None and remote.version.modified_ns == snapshot.modified_ns:
+        return SyncResult(name=key, status=SyncStatus.CONFLICT)
 
-    if remote.modified_ns is not None and remote.size is not None:
+    if not force and remote.modified_ns is not None and remote.size is not None:
         if remote.modified_ns > snapshot.modified_ns:
-            return SyncResult(key=key, status=SyncStatus.REMOTE_NEWER)
+            return SyncResult(name=key, status=SyncStatus.REMOTE_NEWER)
         if remote.modified_ns == snapshot.modified_ns:
-            return SyncResult(key=key, status=SyncStatus.CONFLICT)
+            return SyncResult(name=key, status=SyncStatus.CONFLICT)
 
     status = SyncStatus.UPDATED if remote.exists else SyncStatus.CREATED
     if not dryrun:
         if local_version is None:
             local_version = snapshot.version
-        store.upload(snapshot.content, key, local_version, remote)
-    return SyncResult(key=key, status=status)
+        store.upload(snapshot.content, key, local_version, remote, media_type)
+    return SyncResult(name=key, status=status)
+
+
+class S3Target:
+    concurrent = True
+
+    def __init__(self, store: S3Store, prefix: str = ""):
+        self.store = store
+        self.prefix = prefix.strip("/")
+
+    def sync(self, artifact: Artifact, dryrun: bool = False, force: bool = False) -> SyncResult:
+        key = f"{self.prefix}/{artifact.name}" if self.prefix else artifact.name
+        return sync_file(
+            self.store,
+            artifact.path,
+            key,
+            dryrun=dryrun,
+            media_type=artifact.media_type,
+            force=force,
+        )

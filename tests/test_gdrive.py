@@ -3,7 +3,8 @@ import builtins
 import pytest
 
 from msm.exceptions import MissingDependencyError
-from msm.gdrive import DriveSession, SyncStatus
+from msm.gdrive import DriveSession
+from msm.remote import Artifact, SyncStatus
 
 
 class FakeRequest:
@@ -95,7 +96,7 @@ def test_sync_file_skips_matching_remote_file(tmp_path):
 
     result = session.sync_file(path)
 
-    assert result.status == SyncStatus.SKIPPED
+    assert result.status == SyncStatus.UNCHANGED
     assert result.remote_id == "remote-id"
     assert not service.fake_files.create_calls
     assert not service.fake_files.update_calls
@@ -154,7 +155,7 @@ def test_sync_file_dryrun_does_not_mutate(tmp_path):
 
     result = session.sync_file(path, dryrun=True)
 
-    assert result.status == SyncStatus.WOULD_CREATE
+    assert result.status == SyncStatus.CREATED
     assert not service.fake_files.create_calls
     assert not service.fake_files.update_calls
 
@@ -178,6 +179,27 @@ def test_sync_file_conflicts_with_unmanaged_same_name_file(tmp_path):
     assert result.error is not None
     assert "not managed" in result.error
     assert not service.fake_files.update_calls
+
+
+def test_sync_force_pushes_a_conflicting_score(tmp_path):
+    path = tmp_path / "source.mscz"
+    path.write_bytes(b"abc")
+    remote = {
+        "id": "one",
+        "name": "Score-C.mscz",
+        "mimeType": "application/x-musescore",
+        "size": "2",
+        "md5Checksum": "old",
+    }
+    service = FakeService([{"files": [remote]}])
+
+    result = DriveSession(service, "folder-id").sync(
+        Artifact(path=path, name="Score-C.mscz", media_type="application/x-musescore"), force=True
+    )
+
+    assert result.status == SyncStatus.UPDATED
+    assert result.remote_id == "one"
+    assert service.fake_files.update_calls[0]["fileId"] == "one"
 
 
 def test_sync_file_conflicts_with_unmanaged_same_name_non_png(tmp_path):
@@ -220,6 +242,19 @@ def test_sync_file_conflicts_with_duplicate_managed_files(tmp_path):
     assert not service.fake_files.update_calls
 
 
+def test_sync_accepts_score_artifact_name_and_media_type(tmp_path):
+    path = tmp_path / "source.mscz"
+    path.write_bytes(b"abc")
+    service = FakeService([{"files": []}])
+
+    result = DriveSession(service, "folder-id").sync(
+        Artifact(path=path, name="Normalized-C.mscz", media_type="application/vnd.musescore.score")
+    )
+
+    assert result.name == "Normalized-C.mscz"
+    assert service.fake_files.create_calls[0]["body"]["mimeType"] == "application/vnd.musescore.score"
+
+
 def test_validate_folder_rejects_non_folder():
     service = FakeService([{"files": [{"id": "folder-id", "mimeType": "image/png"}]}])
 
@@ -237,5 +272,5 @@ def test_missing_google_dependencies_are_reported_only_when_connecting(monkeypat
 
     monkeypatch.setattr(builtins, "__import__", block_google_import)
 
-    with pytest.raises(MissingDependencyError, match="'gcs' package extra"):
-        DriveSession.from_credentials(tmp_path / "credentials.json", "folder-id")
+    with pytest.raises(MissingDependencyError, match="'drive' package extra"):
+        DriveSession.from_credentials(tmp_path / "credentials.json", "folder-id", tmp_path / "token.json")
